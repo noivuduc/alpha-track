@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import engine, init_redis, close_redis, Base, get_cache
-from app.routers import auth, portfolio, market, admin, research
+from app.routers import auth, portfolio, market, admin, research, search
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log      = logging.getLogger(__name__)
@@ -85,6 +85,7 @@ app.include_router(portfolio.router, prefix="/api/v1")
 app.include_router(market.router,    prefix="/api/v1")
 app.include_router(admin.router,     prefix="/api/v1")
 app.include_router(research.router,  prefix="/api/v1")
+app.include_router(search.router,    prefix="/api/v1")
 
 @app.get("/health")
 async def health():

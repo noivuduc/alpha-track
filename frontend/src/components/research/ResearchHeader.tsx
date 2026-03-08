@@ -1,6 +1,5 @@
 "use client";
-import { ArrowLeft, ExternalLink, RefreshCw } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { ExternalLink, RefreshCw } from "lucide-react";
 import { ResearchData } from "@/lib/api";
 
 function fmt(n: number | undefined | null, decimals = 2): string {
@@ -19,37 +18,17 @@ function fmtLargeNum(n: number | undefined | null): string {
 interface Props { data: ResearchData; onRefresh: () => void; refreshing: boolean; }
 
 export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
-  const router   = useRouter();
   const snap     = data.snapshot;
   const company  = data.company;
   const profile  = data.profile;
   const positive = (snap.day_change ?? 0) >= 0;
 
-  const price     = snap.price ?? profile.pe_ratio;
   const change    = snap.day_change;
   const changePct = snap.day_change_percent;
 
   return (
-    <div className="bg-zinc-900 border-b border-zinc-800 sticky top-0 z-40">
-      {/* Back bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-3 flex items-center justify-between">
-        <button
-          onClick={() => router.back()}
-          className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-200 text-sm transition-colors"
-        >
-          <ArrowLeft size={15} /> Dashboard
-        </button>
-        <button
-          onClick={onRefresh}
-          className="text-zinc-500 hover:text-zinc-300 p-1.5 rounded-lg hover:bg-zinc-800 transition-colors"
-          title="Force refresh data"
-        >
-          <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-        </button>
-      </div>
-
-      {/* Main header */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+    <div className="bg-zinc-900 border-b border-zinc-800">
+      <div className="px-4 sm:px-6 py-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           {/* Left: company identity */}
           <div>
@@ -74,7 +53,7 @@ export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
                   {company.exchange && (
                     <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded">{company.exchange}</span>
                   )}
-                  {(company.sector || profile.description) && (
+                  {company.sector && (
                     <span className="text-xs text-zinc-500">{company.sector}</span>
                   )}
                   {company.industry && (
@@ -86,11 +65,13 @@ export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
             <div className="flex flex-wrap gap-4 text-xs text-zinc-500 mt-2 ml-12">
               {company.location && <span>📍 {company.location}</span>}
               {profile.employees && <span>👥 {profile.employees.toLocaleString()} employees</span>}
-              {profile.country  && !company.location && <span>📍 {profile.city || ""}{profile.city ? ", " : ""}{profile.country}</span>}
+              {profile.country && !company.location && (
+                <span>📍 {profile.city ? `${profile.city}, ` : ""}{profile.country}</span>
+              )}
             </div>
           </div>
 
-          {/* Right: price + key stats */}
+          {/* Right: price + quick stats + refresh */}
           <div className="flex flex-wrap gap-6 items-start">
             {/* Price block */}
             <div className="text-right">
@@ -110,14 +91,14 @@ export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
             {/* Quick stats */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
               {[
-                ["Mkt Cap",   fmtLargeNum(profile.market_cap)],
-                ["Ent. Value",fmtLargeNum(profile.enterprise_value)],
-                ["52W High",  profile.week52_high  ? `$${fmt(profile.week52_high)}`  : "—"],
-                ["52W Low",   profile.week52_low   ? `$${fmt(profile.week52_low)}`   : "—"],
-                ["P/E",       fmt(profile.pe_ratio, 1)],
-                ["Fwd P/E",   fmt(profile.forward_pe, 1)],
-                ["Beta",      fmt(profile.beta, 2)],
-                ["Avg Vol",   profile.avg_volume ? (profile.avg_volume / 1e6).toFixed(1) + "M" : "—"],
+                ["Mkt Cap",    fmtLargeNum(profile.market_cap)],
+                ["Ent. Value", fmtLargeNum(profile.enterprise_value)],
+                ["52W High",   profile.week52_high  ? `$${fmt(profile.week52_high)}`  : "—"],
+                ["52W Low",    profile.week52_low   ? `$${fmt(profile.week52_low)}`   : "—"],
+                ["P/E",        fmt(profile.pe_ratio, 1)],
+                ["Fwd P/E",    fmt(profile.forward_pe, 1)],
+                ["Beta",       fmt(profile.beta, 2)],
+                ["Avg Vol",    profile.avg_volume ? (profile.avg_volume / 1e6).toFixed(1) + "M" : "—"],
               ].map(([label, val]) => (
                 <div key={label} className="flex items-center gap-2">
                   <span className="text-zinc-500 w-20 shrink-0">{label}</span>
@@ -125,6 +106,15 @@ export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
                 </div>
               ))}
             </div>
+
+            {/* Refresh */}
+            <button
+              onClick={onRefresh}
+              className="text-zinc-500 hover:text-zinc-300 p-1.5 rounded-lg hover:bg-zinc-800 transition-colors self-start"
+              title="Force refresh data"
+            >
+              <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+            </button>
           </div>
         </div>
       </div>

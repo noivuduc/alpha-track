@@ -177,7 +177,7 @@ export default function StockPriceChart({ ticker }: { ticker: string }) {
       ) : (
         <>
           {/* Price chart */}
-          <ResponsiveContainer width="100%" height={280}>
+          <ResponsiveContainer width="100%" height={380}>
             <ComposedChart data={bars} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} syncId="stock">
               <defs>
                 <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
@@ -212,7 +212,7 @@ export default function StockPriceChart({ ticker }: { ticker: string }) {
           </ResponsiveContainer>
 
           {/* Volume chart */}
-          <ResponsiveContainer width="100%" height={70}>
+          <ResponsiveContainer width="100%" height={90}>
             <ComposedChart data={bars} margin={{ top: 0, right: 8, bottom: 0, left: 0 }} syncId="stock">
               <XAxis dataKey="ts" hide />
               <YAxis tick={false} axisLine={false} tickLine={false} width={52} />

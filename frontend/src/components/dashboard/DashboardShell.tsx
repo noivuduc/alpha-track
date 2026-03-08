@@ -4,13 +4,14 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   LayoutDashboard, BarChart2, ShieldAlert, LineChart,
-  Plus, ChevronDown, LogOut, RefreshCw, Search,
+  Plus, ChevronDown, LogOut, RefreshCw,
 } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import {
   portfolios as portApi, positions as posApi,
   Portfolio, Position, PortfolioAnalytics,
 } from "@/lib/api";
+import SearchAutocomplete from "@/components/research/SearchAutocomplete";
 
 const OverviewTab     = dynamic(() => import("./OverviewTab"),     { ssr: false });
 const HoldingsTab     = dynamic(() => import("./HoldingsTab"),     { ssr: false });
@@ -47,7 +48,6 @@ export default function DashboardShell() {
   const [selected,    setSelected]    = useState<Portfolio | null>(null);
   const [positions,   setPositions]   = useState<Position[]>([]);
   const [analytics,   setAnalytics]   = useState<PortfolioAnalytics | null>(null);
-  const [searchTicker, setSearchTicker] = useState("");
   const [portOpen,    setPortOpen]    = useState(false);
   const [newPortName, setNewPortName] = useState("");
   const [creating,    setCreating]    = useState(false);
@@ -224,22 +224,9 @@ export default function DashboardShell() {
             )}
 
             {/* Ticker research search */}
-            <form
-              onSubmit={e => {
-                e.preventDefault();
-                const sym = searchTicker.trim().toUpperCase();
-                if (sym) { router.push(`/research/${sym}`); setSearchTicker(""); }
-              }}
-              className="hidden sm:flex items-center gap-1 bg-zinc-800 rounded-lg px-2 py-1"
-            >
-              <Search size={13} className="text-zinc-500 shrink-0" />
-              <input
-                value={searchTicker}
-                onChange={e => setSearchTicker(e.target.value)}
-                placeholder="Research ticker…"
-                className="bg-transparent text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none w-28"
-              />
-            </form>
+            <div className="hidden sm:block">
+              <SearchAutocomplete placeholder="Research ticker…" />
+            </div>
 
             <button
               onClick={handleRefresh}

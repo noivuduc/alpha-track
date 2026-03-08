@@ -2,7 +2,7 @@
 import { useMemo } from "react";
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList,
 } from "recharts";
 import { SegmentedRevenuePeriod, SegmentedRevenueItem } from "@/lib/api";
 
@@ -62,7 +62,7 @@ function buildHistorical(periods: SegmentedRevenuePeriod[], axis: string): Recor
 
 const TT_STYLE = { backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, color: "#e4e4e7", fontSize: 12 };
 
-function SegmentTable({ segs, title }: { segs: Segment[]; title: string }) {
+function SegmentTable({ segs, title, colorMap }: { segs: Segment[]; title: string; colorMap: Record<string, string> }) {
   if (!segs.length) return null;
   return (
     <div>
@@ -80,7 +80,7 @@ function SegmentTable({ segs, title }: { segs: Segment[]; title: string }) {
             {segs.map((s, i) => (
               <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
                 <td className="py-2 pr-4 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: colorMap[s.label] || COLORS[i % COLORS.length] }} />
                   <span className="text-zinc-200">{s.label}</span>
                 </td>
                 <td className="py-2 px-3 text-right font-mono tabular-nums text-zinc-300">{fmtB(s.amount)}</td>
@@ -101,7 +101,7 @@ function SegmentTable({ segs, title }: { segs: Segment[]; title: string }) {
   );
 }
 
-function DonutChart({ segs, title }: { segs: Segment[]; title: string }) {
+function DonutChart({ segs, title, colorMap }: { segs: Segment[]; title: string; colorMap: Record<string, string> }) {
   if (!segs.length) return null;
   return (
     <div>
@@ -109,7 +109,7 @@ function DonutChart({ segs, title }: { segs: Segment[]; title: string }) {
       <ResponsiveContainer width="100%" height={220}>
         <PieChart>
           <Pie data={segs} dataKey="amount" nameKey="label" cx="50%" cy="50%" innerRadius={55} outerRadius={90} paddingAngle={2}>
-            {segs.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+            {segs.map((s, i) => <Cell key={i} fill={colorMap[s.label] || COLORS[i % COLORS.length]} />)}
           </Pie>
           <Tooltip contentStyle={TT_STYLE} formatter={(v) => [fmtB(Number(v))]} />
           <Legend
@@ -122,20 +122,60 @@ function DonutChart({ segs, title }: { segs: Segment[]; title: string }) {
   );
 }
 
-function HistoricalBar({ data, keys, title }: { data: Record<string, number | string>[]; keys: string[]; title: string }) {
+function HistoricalBar({ data, keys, title, colorMap }: {
+  data: Record<string, number | string>[]; keys: string[]; title: string;
+  colorMap: Record<string, string>;
+}) {
   if (!data.length || !keys.length) return null;
   return (
     <div>
       <div className="text-xs font-semibold text-zinc-400 mb-2">{title}</div>
-      <ResponsiveContainer width="100%" height={200}>
+      <ResponsiveContainer width="100%" height={240}>
         <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
           <XAxis dataKey="year" tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false}
                  tickFormatter={v => fmtB(v)} width={64} />
-          <Tooltip contentStyle={TT_STYLE} formatter={(v) => [fmtB(Number(v))]} />
+          <Tooltip
+            contentStyle={TT_STYLE}
+            formatter={(v, name) => [fmtB(Number(v)), name]}
+          />
+          <Legend
+            iconType="circle" iconSize={8}
+            formatter={(v) => <span style={{ color: "#a1a1aa", fontSize: 11 }}>{v}</span>}
+            wrapperStyle={{ paddingTop: 8 }}
+          />
           {keys.map((k, i) => (
-            <Bar key={k} dataKey={k} stackId="a" fill={COLORS[i % COLORS.length]} radius={i === keys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]} />
+            <Bar
+              key={k}
+              dataKey={k}
+              stackId="a"
+              fill={colorMap[k] || COLORS[i % COLORS.length]}
+              radius={i === keys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+            >
+              <LabelList
+                dataKey={k}
+                position="center"
+                content={(props) => {
+                  const { x, y, width, height, value } = props as {
+                    x?: number; y?: number; width?: number; height?: number; value?: number;
+                  };
+                  if (!value || !width || !height || height < 18 || width < 30) return null;
+                  return (
+                    <text
+                      x={(x ?? 0) + (width ?? 0) / 2}
+                      y={(y ?? 0) + (height ?? 0) / 2}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      fill="rgba(255,255,255,0.85)"
+                      fontSize={9}
+                    >
+                      {k.length > 12 ? k.slice(0, 11) + "…" : k}
+                    </text>
+                  );
+                }}
+              />
+            </Bar>
           ))}
         </BarChart>
       </ResponsiveContainer>
@@ -148,8 +188,18 @@ export default function RevenueSegmentation({ segments }: { segments: SegmentedR
   const geoSegs     = useMemo(() => computeGrowth(segments, GEO_AXIS),     [segments]);
   const productHist = useMemo(() => buildHistorical(segments, PRODUCT_AXIS), [segments]);
   const geoHist     = useMemo(() => buildHistorical(segments, GEO_AXIS),     [segments]);
-  const productKeys = productSegs.map(s => s.label);
-  const geoKeys     = geoSegs.map(s => s.label);
+  const productKeys = useMemo(() => productSegs.map(s => s.label), [productSegs]);
+  const geoKeys     = useMemo(() => geoSegs.map(s => s.label),     [geoSegs]);
+
+  // Build stable color map: same segment label → same color across product and geo
+  const colorMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    let idx = 0;
+    [...productKeys, ...geoKeys].forEach(k => {
+      if (!(k in map)) map[k] = COLORS[idx++ % COLORS.length];
+    });
+    return map;
+  }, [productKeys, geoKeys]);
 
   if (!productSegs.length && !geoSegs.length) {
     return <div className="text-xs text-zinc-500 py-4">No segmentation data available for this ticker</div>;
@@ -167,11 +217,11 @@ export default function RevenueSegmentation({ segments }: { segments: SegmentedR
             {latestPeriod && <span className="text-xs text-zinc-600 bg-zinc-800 px-2 py-0.5 rounded">FY{latestPeriod}</span>}
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <DonutChart segs={productSegs} title="Revenue by Product" />
-            <SegmentTable segs={productSegs} title="Detail" />
+            <DonutChart segs={productSegs} title="Revenue by Product" colorMap={colorMap} />
+            <SegmentTable segs={productSegs} title="Detail" colorMap={colorMap} />
           </div>
           {productHist.length > 1 && (
-            <HistoricalBar data={productHist} keys={productKeys} title="Historical Revenue by Product" />
+            <HistoricalBar data={productHist} keys={productKeys} title="Historical Revenue by Product" colorMap={colorMap} />
           )}
         </div>
       )}
@@ -181,11 +231,11 @@ export default function RevenueSegmentation({ segments }: { segments: SegmentedR
         <div className="space-y-4">
           <div className="text-sm font-semibold text-zinc-300">Geographic Breakdown</div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <DonutChart segs={geoSegs} title="Revenue by Geography" />
-            <SegmentTable segs={geoSegs} title="Detail" />
+            <DonutChart segs={geoSegs} title="Revenue by Geography" colorMap={colorMap} />
+            <SegmentTable segs={geoSegs} title="Detail" colorMap={colorMap} />
           </div>
           {geoHist.length > 1 && (
-            <HistoricalBar data={geoHist} keys={geoKeys} title="Historical Revenue by Geography" />
+            <HistoricalBar data={geoHist} keys={geoKeys} title="Historical Revenue by Geography" colorMap={colorMap} />
           )}
         </div>
       )}
