@@ -17,6 +17,11 @@ import EstimatesSection    from "./EstimatesSection";
 import NewsSection         from "./NewsSection";
 import RevenueSegmentation from "./RevenueSegmentation";
 import ResearchNav, { NavSection } from "./ResearchNav";
+import PeerComparison      from "./PeerComparison";
+import HistoricalValuation from "./HistoricalValuation";
+import EarningsReaction    from "./EarningsReaction";
+import InvestmentInsights  from "./InvestmentInsights";
+import { PeerMetrics }     from "@/lib/api";
 
 const FinancialCharts     = dynamic(() => import("./FinancialCharts"),     { ssr: false });
 const FinancialStatements = dynamic(() => import("./FinancialStatements"), { ssr: false });
@@ -26,11 +31,15 @@ const ALL_NAV: NavSection[] = [
   { id: "sec-price",      label: "Price Chart"      },
   { id: "sec-profile",    label: "Company Profile"  },
   { id: "sec-metrics",    label: "Key Metrics"      },
+  { id: "sec-insights",   label: "Investment Thesis" },
   { id: "sec-fin-charts", label: "Performance"      },
   { id: "sec-statements", label: "Statements"       },
-  { id: "sec-segments",   label: "Revenue Segments" },
+  { id: "sec-segments",   label: "Revenue Drivers"  },
   { id: "sec-valuation",  label: "Valuation"        },
+  { id: "sec-val-history",label: "P/E History"      },
+  { id: "sec-earnings",   label: "Earnings"         },
   { id: "sec-ownership",  label: "Ownership"        },
+  { id: "sec-peers",      label: "Peer Comparison"  },
   { id: "sec-estimates",  label: "Estimates"        },
   { id: "sec-news",       label: "News"             },
 ];
@@ -104,21 +113,45 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
     company, profile, income, balance, cashflow,
     income_quarterly, balance_quarterly, cashflow_quarterly,
     metrics, ownership, insider_trades, estimates_annual, estimates_quarterly,
-    news, segments,
+    news, segments, peers, earnings_history, pe_history,
   } = data;
 
-  const hasFinancials = income.length > 0;
-  const hasSegments   = segments?.length > 0;
+  const hasFinancials    = income.length > 0;
+  const hasSegments      = segments?.length > 0;
+  const hasPeers         = peers && peers.length > 0;
+  const hasEarnings      = earnings_history && earnings_history.length > 0;
+  const hasPeHistory     = pe_history && pe_history.length > 0;
 
   const navSections = ALL_NAV.filter(s => {
-    if (s.id === "sec-profile"    && !profile.description && !company.sector) return false;
-    if (s.id === "sec-fin-charts" && !hasFinancials) return false;
-    if (s.id === "sec-statements" && !hasFinancials) return false;
-    if (s.id === "sec-segments"   && !hasSegments)   return false;
-    if (s.id === "sec-estimates"  && !estimates_annual.length && !estimates_quarterly.length) return false;
-    if (s.id === "sec-news"       && !news.length)   return false;
+    if (s.id === "sec-profile"     && !profile.description && !company.sector) return false;
+    if (s.id === "sec-fin-charts"  && !hasFinancials) return false;
+    if (s.id === "sec-statements"  && !hasFinancials) return false;
+    if (s.id === "sec-segments"    && !hasSegments)   return false;
+    if (s.id === "sec-estimates"   && !estimates_annual.length && !estimates_quarterly.length) return false;
+    if (s.id === "sec-news"        && !news.length)   return false;
+    if (s.id === "sec-peers"       && !hasPeers)      return false;
+    if (s.id === "sec-earnings"    && !hasEarnings)   return false;
+    if (s.id === "sec-val-history" && !hasPeHistory)  return false;
     return true;
   });
+
+  // Build selfMetrics from existing data for peer comparison
+  const selfMetrics: PeerMetrics = {
+    symbol:           ticker,
+    name:             company.name,
+    market_cap:       profile.market_cap,
+    price:            data.snapshot.price,
+    day_change_pct:   data.snapshot.day_change_percent,
+    revenue_growth:   metrics?.revenue_growth ?? profile.revenue_growth,
+    gross_margin:     metrics?.gross_margin    ?? profile.gross_margins,
+    operating_margin: metrics?.operating_margin ?? profile.operating_margins,
+    net_margin:       metrics?.net_margin       ?? profile.profit_margins,
+    roic:             metrics?.return_on_invested_capital,
+    pe:               profile.pe_ratio ?? metrics?.price_to_earnings_ratio,
+    ev_ebitda:        profile.ev_ebitda ?? metrics?.enterprise_value_to_ebitda_ratio,
+    ps:               profile.price_to_sales ?? metrics?.price_to_sales_ratio,
+    fcf_yield:        metrics?.free_cash_flow_yield,
+  };
 
   const periodToggle = (
     <div className="flex gap-0.5 bg-zinc-800 rounded-lg p-0.5">
@@ -240,6 +273,10 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               <KeyMetricsGrid data={data} />
             </SectionPanel>
 
+            <SectionPanel title="Investment Thesis" id="sec-insights">
+              <InvestmentInsights data={data} />
+            </SectionPanel>
+
             {hasFinancials && (
               <SectionPanel title="Financial Performance" action={periodToggle} id="sec-fin-charts">
                 <FinancialCharts
@@ -261,7 +298,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             )}
 
             {hasSegments && (
-              <SectionPanel title="Revenue Segmentation" id="sec-segments">
+              <SectionPanel title="Revenue Drivers" id="sec-segments">
                 <RevenueSegmentation segments={segments} />
               </SectionPanel>
             )}
@@ -270,9 +307,27 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               <ValuationSection metrics={metrics} profile={profile} />
             </SectionPanel>
 
+            {hasPeHistory && (
+              <SectionPanel title="Historical P/E Valuation" id="sec-val-history">
+                <HistoricalValuation peHistory={pe_history!} currentPe={profile.pe_ratio ?? metrics?.price_to_earnings_ratio} />
+              </SectionPanel>
+            )}
+
+            {hasEarnings && (
+              <SectionPanel title="Earnings Reaction" id="sec-earnings">
+                <EarningsReaction earnings={earnings_history!} />
+              </SectionPanel>
+            )}
+
             <SectionPanel title="Ownership & Insider Transactions" id="sec-ownership">
               <OwnershipSection ownership={ownership} insider_trades={insider_trades} profile={profile} />
             </SectionPanel>
+
+            {hasPeers && (
+              <SectionPanel title="Peer Comparison" id="sec-peers">
+                <PeerComparison ticker={ticker} selfMetrics={selfMetrics} peers={peers!} />
+              </SectionPanel>
+            )}
 
             {(estimates_annual.length > 0 || estimates_quarterly.length > 0) && (
               <SectionPanel title="Analyst Estimates" id="sec-estimates">
