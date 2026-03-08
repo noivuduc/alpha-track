@@ -88,17 +88,37 @@ function cellColor(key: string, v: number | undefined | null): string {
 type TabKey = "income" | "balance" | "cashflow";
 
 interface Props {
-  income:   IncomeStatement[];
-  balance:  BalanceSheet[];
-  cashflow: CashFlowStatement[];
+  income:           IncomeStatement[];
+  balance:          BalanceSheet[];
+  cashflow:         CashFlowStatement[];
+  incomeQ?:         IncomeStatement[];
+  balanceQ?:        BalanceSheet[];
+  cashflowQ?:       CashFlowStatement[];
+  period?:          "annual" | "quarterly";
+  onPeriodChange?:  (p: "annual" | "quarterly") => void;
 }
 
-export default function FinancialStatements({ income, balance, cashflow }: Props) {
+export default function FinancialStatements({
+  income, balance, cashflow,
+  incomeQ = [], balanceQ = [], cashflowQ = [],
+  period = "annual", onPeriodChange,
+}: Props) {
   const [tab, setTab] = useState<TabKey>("income");
+  const isQ = period === "quarterly";
 
-  const periods = income.map(r => r.report_period.slice(0, 4));
-  const bperiods = balance.map(r => r.report_period.slice(0, 4));
-  const cperiods = cashflow.map(r => r.report_period.slice(0, 4));
+  const activeIncome  = isQ ? incomeQ  : income;
+  const activeBalance = isQ ? balanceQ : balance;
+  const activeCashflow = isQ ? cashflowQ : cashflow;
+
+  function fmtPeriodLabel(r: { report_period: string; fiscal_period?: string }) {
+    if (!isQ) return r.report_period.slice(0, 4);
+    const qLabel = r.fiscal_period?.match(/Q\d/)?.[0] || "";
+    return `${r.report_period.slice(0, 4)} ${qLabel}`;
+  }
+
+  const periods  = activeIncome.map(fmtPeriodLabel);
+  const bperiods = activeBalance.map(fmtPeriodLabel);
+  const cperiods = activeCashflow.map(fmtPeriodLabel);
 
   const tabs: { id: TabKey; label: string }[] = [
     { id: "income",   label: "Income Statement" },
@@ -144,19 +164,33 @@ export default function FinancialStatements({ income, balance, cashflow }: Props
 
   return (
     <div>
-      <div className="flex gap-1 border-b border-zinc-700 mb-4">
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
-              tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-zinc-500 hover:text-zinc-300"
-            }`}>
-            {t.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between border-b border-zinc-700 mb-4">
+        <div className="flex gap-1">
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+                tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-zinc-500 hover:text-zinc-300"
+              }`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {onPeriodChange && (
+          <div className="flex gap-0.5 bg-zinc-800 rounded-lg p-0.5 mb-1">
+            {(["annual", "quarterly"] as const).map(p => (
+              <button key={p} onClick={() => onPeriodChange(p)}
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${
+                  period === p ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-zinc-200"
+                }`}>
+                {p === "annual" ? "Annual" : "Quarterly"}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
-      {tab === "income"   && renderTable(INCOME_ROWS,   income   as unknown as Record<string, unknown>[], periods)}
-      {tab === "balance"  && renderTable(BALANCE_ROWS,  balance  as unknown as Record<string, unknown>[], bperiods)}
-      {tab === "cashflow" && renderTable(CASHFLOW_ROWS, cashflow as unknown as Record<string, unknown>[], cperiods)}
+      {tab === "income"   && renderTable(INCOME_ROWS,   activeIncome    as unknown as Record<string, unknown>[], periods)}
+      {tab === "balance"  && renderTable(BALANCE_ROWS,  activeBalance   as unknown as Record<string, unknown>[], bperiods)}
+      {tab === "cashflow" && renderTable(CASHFLOW_ROWS, activeCashflow  as unknown as Record<string, unknown>[], cperiods)}
     </div>
   );
 }

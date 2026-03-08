@@ -12,17 +12,11 @@ import ValuationSection  from "./ValuationSection";
 import OwnershipSection  from "./OwnershipSection";
 import EstimatesSection  from "./EstimatesSection";
 import NewsSection       from "./NewsSection";
+import RevenueSegmentation from "./RevenueSegmentation";
 
 const FinancialCharts     = dynamic(() => import("./FinancialCharts"),     { ssr: false });
 const FinancialStatements = dynamic(() => import("./FinancialStatements"), { ssr: false });
-
-function Spinner() {
-  return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-7 h-7 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-}
+const StockPriceChart     = dynamic(() => import("./StockPriceChart"),     { ssr: false });
 
 export default function ResearchShell({ ticker }: { ticker: string }) {
   const { user, loading: authLoading } = useAuth();
@@ -32,6 +26,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [finPeriod,  setFinPeriod]  = useState<"annual" | "quarterly">("annual");
 
   const load = useCallback(async (force = false) => {
     try {
@@ -82,10 +77,29 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
 
   if (!data) return null;
 
-  const { company, profile, income, income_ttm, balance, balance_ttm, cashflow, cashflow_ttm,
-          metrics, ownership, insider_trades, estimates_annual, estimates_quarterly, news } = data;
+  const {
+    company, profile, income, income_ttm, balance, balance_ttm, cashflow, cashflow_ttm,
+    income_quarterly, balance_quarterly, cashflow_quarterly,
+    metrics, ownership, insider_trades, estimates_annual, estimates_quarterly,
+    news, segments,
+  } = data;
 
   const hasFinancials = income.length > 0;
+  const hasSegments   = segments?.length > 0;
+
+  // Period toggle shared across charts + statements
+  const periodToggle = (
+    <div className="flex gap-0.5 bg-zinc-800 rounded-lg p-0.5">
+      {(["annual", "quarterly"] as const).map(p => (
+        <button key={p} onClick={() => setFinPeriod(p)}
+          className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${
+            finPeriod === p ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-zinc-200"
+          }`}>
+          {p === "annual" ? "Annual" : "Quarterly"}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50">
@@ -93,9 +107,14 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-4">
 
+        {/* Stock Price Chart */}
+        <SectionPanel title="Stock Price History">
+          <StockPriceChart ticker={ticker} />
+        </SectionPanel>
+
         {/* Company Profile */}
         {(profile.description || company.sector) && (
-          <SectionPanel title="Company Profile">
+          <SectionPanel title="Company Profile" defaultOpen={false}>
             <div className="space-y-3">
               {profile.description && (
                 <p className="text-sm text-zinc-400 leading-relaxed max-w-4xl">
@@ -121,7 +140,6 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
                 {company.cik      && <Info label="CIK"       value={company.cik} />}
               </div>
 
-              {/* Officers */}
               {profile.officers && profile.officers.length > 0 && (
                 <div className="mt-4">
                   <div className="text-xs font-semibold text-zinc-400 mb-2">Key Executives</div>
@@ -147,15 +165,30 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
 
         {/* Financial Charts */}
         {hasFinancials && (
-          <SectionPanel title="Financial Performance (Historical)">
-            <FinancialCharts income={income} cashflow={cashflow} />
+          <SectionPanel title="Financial Performance" action={periodToggle}>
+            <FinancialCharts
+              income={income}    cashflow={cashflow}
+              incomeQ={income_quarterly} cashflowQ={cashflow_quarterly}
+              period={finPeriod}
+            />
           </SectionPanel>
         )}
 
         {/* Financial Statements */}
         {hasFinancials && (
-          <SectionPanel title="Financial Statements (10-Year Annual)">
-            <FinancialStatements income={income} balance={balance} cashflow={cashflow} />
+          <SectionPanel title="Financial Statements">
+            <FinancialStatements
+              income={income}   balance={balance}   cashflow={cashflow}
+              incomeQ={income_quarterly} balanceQ={balance_quarterly} cashflowQ={cashflow_quarterly}
+              period={finPeriod} onPeriodChange={setFinPeriod}
+            />
+          </SectionPanel>
+        )}
+
+        {/* Revenue Segmentation */}
+        {hasSegments && (
+          <SectionPanel title="Revenue Segmentation">
+            <RevenueSegmentation segments={segments} />
           </SectionPanel>
         )}
 
@@ -183,9 +216,8 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
           </SectionPanel>
         )}
 
-        {/* Footer */}
         <div className="text-xs text-zinc-700 text-center py-4">
-          Data from financialdatasets.ai & yfinance · Cached 1h · Last computed {new Date(data.computed_at).toLocaleString()}
+          Data from financialdatasets.ai &amp; yfinance · Cached 1h · Last computed {new Date(data.computed_at).toLocaleString()}
         </div>
       </main>
     </div>

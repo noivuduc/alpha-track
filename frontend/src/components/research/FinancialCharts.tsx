@@ -21,16 +21,24 @@ function yoyGrowth(arr: number[]): (number | null)[] {
 }
 
 interface Props {
-  income:   IncomeStatement[];
-  cashflow: CashFlowStatement[];
+  income:           IncomeStatement[];
+  cashflow:         CashFlowStatement[];
+  incomeQ?:         IncomeStatement[];
+  cashflowQ?:       CashFlowStatement[];
+  period?:          "annual" | "quarterly";
 }
 
-export default function FinancialCharts({ income, cashflow }: Props) {
+export default function FinancialCharts({ income, cashflow, incomeQ = [], cashflowQ = [], period = "annual" }: Props) {
+  const isQ = period === "quarterly";
   // Oldest → newest for chart order
-  const inc = [...income].reverse();
-  const cf  = [...cashflow].reverse();
+  const inc = [...(isQ ? incomeQ  : income)].reverse();
+  const cf  = [...(isQ ? cashflowQ : cashflow)].reverse();
 
-  const years = inc.map(r => r.report_period.slice(0, 4));
+  const years = inc.map(r => {
+    if (!isQ) return r.report_period.slice(0, 4);
+    const q = r.fiscal_period?.match(/Q\d/)?.[0] ?? "Q?";
+    return `${q}'${r.report_period.slice(2, 4)}`;
+  });
 
   const revs     = inc.map(r => r.revenue       ?? 0);
   const grossArr = inc.map(r => r.gross_profit   ?? 0);

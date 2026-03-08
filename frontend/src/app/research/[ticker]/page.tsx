@@ -1,5 +1,6 @@
 import ResearchShell from "@/components/research/ResearchShell";
 
-export default function ResearchPage({ params }: { params: { ticker: string } }) {
-  return <ResearchShell ticker={params.ticker.toUpperCase()} />;
+export default async function ResearchPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const { ticker } = await params;
+  return <ResearchShell ticker={ticker.toUpperCase()} />;
 }
