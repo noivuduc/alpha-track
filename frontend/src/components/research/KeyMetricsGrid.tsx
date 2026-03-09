@@ -97,8 +97,10 @@ function buildMetrics(data: ResearchData): { title: string; metrics: MetricDef[]
   const epsGrowth = m?.earnings_per_share_growth != null ? fmtPct(m.earnings_per_share_growth) : "—";
   const earnGrowth = m?.earnings_growth != null ? fmtPct(m.earnings_growth)
     : p.earnings_growth != null ? fmtPct(p.earnings_growth * 100) : "—";
-  const fcfGrowth = m?.free_cash_flow_growth != null ? fmtPct(m.free_cash_flow_growth) : "—";
-  const ebitdaGrowth = m?.ebitda_growth != null ? fmtPct(m.ebitda_growth) : "—";
+  const fcfGrowth      = m?.free_cash_flow_growth      != null ? fmtPct(m.free_cash_flow_growth)      : "—";
+  const ebitdaGrowth   = m?.ebitda_growth              != null ? fmtPct(m.ebitda_growth)              : "—";
+  const opIncGrowth    = m?.operating_income_growth    != null ? fmtPct(m.operating_income_growth)    : "—";
+  const bvGrowth       = m?.book_value_growth          != null ? fmtPct(m.book_value_growth)          : "—";
 
   const pe          = fmtNum(m?.price_to_earnings_ratio ?? p.pe_ratio, 1);
   const fwdPe       = fmtNum(p.forward_pe, 1);
@@ -119,8 +121,18 @@ function buildMetrics(data: ResearchData): { title: string; metrics: MetricDef[]
   const intCoverage  = m?.interest_coverage != null ? fmtNum(m.interest_coverage, 1) : "—";
   const netDebt      = totalDebt != null && cashEq != null ? fmtLarge(totalDebt - cashEq) : "—";
 
-  const bvps   = m?.book_value_per_share    != null ? `$${fmtNum(m.book_value_per_share, 2)}` : "—";
+  const bvps   = m?.book_value_per_share     != null ? `$${fmtNum(m.book_value_per_share, 2)}`    : "—";
   const fcfps  = m?.free_cash_flow_per_share != null ? `$${fmtNum(m.free_cash_flow_per_share, 2)}` : "—";
+
+  // Efficiency
+  const assetTurnover  = m?.asset_turnover       != null ? fmtNum(m.asset_turnover, 2)  : "—";
+  const invTurnover    = m?.inventory_turnover   != null ? fmtNum(m.inventory_turnover, 2) : "—";
+  const recTurnover    = m?.receivables_turnover != null ? fmtNum(m.receivables_turnover, 2) : "—";
+  const dso            = m?.days_sales_outstanding != null ? fmtNum(m.days_sales_outstanding, 0) + "d" : "—";
+  const opCycle        = m?.operating_cycle      != null ? fmtNum(m.operating_cycle, 0) + "d" : "—";
+  const wcTurnover     = m?.working_capital_turnover != null ? fmtNum(m.working_capital_turnover, 2) : "—";
+  const ocfRatio       = m?.operating_cash_flow_ratio != null ? fmtNum(m.operating_cash_flow_ratio, 2) : "—";
+
   const shortRatio = p.short_ratio != null ? fmtNum(p.short_ratio, 2) : "—";
   const shortPct   = p.short_pct_float != null ? fmtPct(p.short_pct_float * 100) : "—";
 
@@ -150,11 +162,13 @@ function buildMetrics(data: ResearchData): { title: string; metrics: MetricDef[]
     {
       title: "Growth",
       metrics: [
-        { label: "Revenue Growth",    value: revGrowth,   color: revGrowth   !== "—" ? (parseFloat(revGrowth)   >= 0 ? "green" : "red") : "neutral" },
-        { label: "EPS Growth",        value: epsGrowth,   color: epsGrowth   !== "—" ? (parseFloat(epsGrowth)   >= 0 ? "green" : "red") : "neutral" },
-        { label: "Earnings Growth",   value: earnGrowth,  color: earnGrowth  !== "—" ? (parseFloat(earnGrowth)  >= 0 ? "green" : "red") : "neutral" },
-        { label: "FCF Growth",        value: fcfGrowth,   color: fcfGrowth   !== "—" ? (parseFloat(fcfGrowth)   >= 0 ? "green" : "red") : "neutral" },
-        { label: "EBITDA Growth",     value: ebitdaGrowth,color: ebitdaGrowth !== "—" ? (parseFloat(ebitdaGrowth) >= 0 ? "green" : "red") : "neutral" },
+        { label: "Revenue Growth",    value: revGrowth,    color: revGrowth    !== "—" ? (parseFloat(revGrowth)    >= 0 ? "green" : "red") : "neutral" },
+        { label: "EPS Growth",        value: epsGrowth,    color: epsGrowth    !== "—" ? (parseFloat(epsGrowth)    >= 0 ? "green" : "red") : "neutral" },
+        { label: "Earnings Growth",   value: earnGrowth,   color: earnGrowth   !== "—" ? (parseFloat(earnGrowth)   >= 0 ? "green" : "red") : "neutral" },
+        { label: "FCF Growth",        value: fcfGrowth,    color: fcfGrowth    !== "—" ? (parseFloat(fcfGrowth)    >= 0 ? "green" : "red") : "neutral" },
+        { label: "Op. Income Growth", value: opIncGrowth,  color: opIncGrowth  !== "—" ? (parseFloat(opIncGrowth)  >= 0 ? "green" : "red") : "neutral" },
+        { label: "EBITDA Growth",     value: ebitdaGrowth, color: ebitdaGrowth !== "—" ? (parseFloat(ebitdaGrowth) >= 0 ? "green" : "red") : "neutral" },
+        { label: "Book Value Growth", value: bvGrowth,     color: bvGrowth     !== "—" ? (parseFloat(bvGrowth)     >= 0 ? "green" : "red") : "neutral" },
       ],
     },
     {
@@ -183,6 +197,18 @@ function buildMetrics(data: ResearchData): { title: string; metrics: MetricDef[]
         { label: "Interest Coverage",value: intCoverage, color: intCoverage !== "—" && parseFloat(intCoverage) > 3 ? "green" : "neutral" },
         { label: "Net Debt",        value: netDebt,      color: "neutral" as Color },
         { label: "Equity (BV)",     value: fmtLarge(equity), color: "neutral" as Color },
+      ],
+    },
+    {
+      title: "Efficiency",
+      metrics: [
+        { label: "Asset Turnover",    value: assetTurnover, color: "neutral" as Color },
+        { label: "Inventory Turnover",value: invTurnover,   color: "neutral" as Color },
+        { label: "Receivables Turn.", value: recTurnover,   color: "neutral" as Color },
+        { label: "Days Sales Out.",   value: dso,           color: "neutral" as Color },
+        { label: "Operating Cycle",   value: opCycle,       color: "neutral" as Color },
+        { label: "WC Turnover",       value: wcTurnover,    color: "neutral" as Color },
+        { label: "OCF Ratio",         value: ocfRatio,      color: "neutral" as Color },
       ],
     },
     {

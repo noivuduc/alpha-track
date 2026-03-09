@@ -92,16 +92,16 @@ export default function EarningsReaction({ earnings }: { earnings: EarningsRecor
       {/* EPS Surprise history bar chart */}
       {scatterData.length > 0 && (
         <div className="bg-zinc-800/40 rounded-xl p-4">
-          <div className="text-xs font-semibold text-zinc-400 mb-3">EPS Surprise History (%)</div>
+          <div className="text-xs font-semibold text-zinc-300 mb-3">EPS Surprise History (%)</div>
           <ResponsiveContainer width="100%" height={180}>
             <BarChart
               data={[...scatterData].reverse()}
               margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: "#71717a", fontSize: 9 }} axisLine={false} tickLine={false}
+              <XAxis dataKey="date" tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false}
                 tickFormatter={v => v.slice(0, 7)} />
-              <YAxis tick={{ fill: "#71717a", fontSize: 10 }} axisLine={false} tickLine={false}
+              <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false}
                 tickFormatter={v => `${v}%`} width={40} />
               <Tooltip contentStyle={TT_STYLE} formatter={(v) => [`${Number(v).toFixed(1)}%`, "EPS Surprise"]} />
               <ReferenceLine y={0} stroke="#52525b" />

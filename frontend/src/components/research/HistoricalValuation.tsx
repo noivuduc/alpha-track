@@ -78,13 +78,13 @@ export default function HistoricalValuation({
       {/* P/E over time */}
       {validPe.length > 1 && (
         <div className="bg-zinc-800/40 rounded-xl p-4">
-          <div className="text-xs font-semibold text-zinc-400 mb-3">Historical P/E Ratio</div>
+          <div className="text-xs font-semibold text-zinc-300 mb-3">Historical P/E Ratio</div>
           <ResponsiveContainer width="100%" height={240}>
             <ComposedChart data={validPe} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-              <XAxis dataKey="year" tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="year" tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis
-                tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false}
+                tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false}
                 tickFormatter={v => `${v}x`} width={42}
                 domain={["auto", "auto"]}
               />
@@ -110,13 +110,13 @@ export default function HistoricalValuation({
       {/* Price history */}
       {priceData.length > 1 && (
         <div className="bg-zinc-800/40 rounded-xl p-4">
-          <div className="text-xs font-semibold text-zinc-400 mb-3">Year-End Price History</div>
+          <div className="text-xs font-semibold text-zinc-300 mb-3">Year-End Price History</div>
           <ResponsiveContainer width="100%" height={200}>
             <ComposedChart data={priceData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-              <XAxis dataKey="year" tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="year" tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis
-                tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false}
+                tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false}
                 tickFormatter={v => `$${v}`} width={52}
               />
               <Tooltip contentStyle={TT_STYLE} formatter={(v) => [`$${Number(v).toFixed(2)}`, "Year-End Price"]} />
@@ -129,13 +129,13 @@ export default function HistoricalValuation({
       {/* EPS history */}
       {validPe.length > 1 && (
         <div className="bg-zinc-800/40 rounded-xl p-4">
-          <div className="text-xs font-semibold text-zinc-400 mb-3">Annual EPS History</div>
+          <div className="text-xs font-semibold text-zinc-300 mb-3">Annual EPS History</div>
           <ResponsiveContainer width="100%" height={180}>
             <ComposedChart data={validPe} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-              <XAxis dataKey="year" tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="year" tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis
-                tick={{ fill: "#71717a", fontSize: 11 }} axisLine={false} tickLine={false}
+                tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false}
                 tickFormatter={v => `$${v}`} width={46}
               />
               <Tooltip contentStyle={TT_STYLE} formatter={(v) => [`$${Number(v).toFixed(2)}`, "EPS"]} />

@@ -68,7 +68,7 @@ export default function FinancialCharts({ income, cashflow, incomeQ = [], cashfl
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       {/* Revenue */}
       <div className={chartClass}>
-        <div className="text-xs font-semibold text-zinc-400 mb-3">Revenue</div>
+        <div className="text-xs font-semibold text-zinc-300 mb-3">Revenue</div>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={revenueData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
@@ -82,7 +82,7 @@ export default function FinancialCharts({ income, cashflow, incomeQ = [], cashfl
 
       {/* EPS */}
       <div className={chartClass}>
-        <div className="text-xs font-semibold text-zinc-400 mb-3">EPS (Diluted)</div>
+        <div className="text-xs font-semibold text-zinc-300 mb-3">EPS (Diluted)</div>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={epsData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
@@ -97,7 +97,7 @@ export default function FinancialCharts({ income, cashflow, incomeQ = [], cashfl
 
       {/* Free Cash Flow */}
       <div className={chartClass}>
-        <div className="text-xs font-semibold text-zinc-400 mb-3">Free Cash Flow</div>
+        <div className="text-xs font-semibold text-zinc-300 mb-3">Free Cash Flow</div>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={fcfData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
@@ -112,7 +112,7 @@ export default function FinancialCharts({ income, cashflow, incomeQ = [], cashfl
 
       {/* Margins */}
       <div className={chartClass}>
-        <div className="text-xs font-semibold text-zinc-400 mb-3">Profit Margins (%)</div>
+        <div className="text-xs font-semibold text-zinc-300 mb-3">Profit Margins (%)</div>
         <ResponsiveContainer width="100%" height={260}>
           <LineChart data={marginData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />

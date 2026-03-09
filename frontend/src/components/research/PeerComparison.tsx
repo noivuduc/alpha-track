@@ -140,9 +140,9 @@ export default function PeerComparison({
         <ResponsiveContainer width="100%" height={200}>
           <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 40, bottom: 0, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
-            <XAxis type="number" tick={{ fill: "#71717a", fontSize: 10 }} axisLine={false} tickLine={false}
+            <XAxis type="number" tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false}
               tickFormatter={v => `${v}${cm.suffix}`} />
-            <YAxis type="category" dataKey="symbol" tick={{ fill: "#a1a1aa", fontSize: 11 }} axisLine={false} tickLine={false} width={50} />
+            <YAxis type="category" dataKey="symbol" tick={{ fill: "#d4d4d8", fontSize: 11 }} axisLine={false} tickLine={false} width={50} />
             <Tooltip contentStyle={TT_STYLE} formatter={v => [`${v}${cm.suffix}`, cm.label]} />
             <Bar dataKey="value" radius={[0, 4, 4, 0]}>
               {chartData.map((d, i) => (
