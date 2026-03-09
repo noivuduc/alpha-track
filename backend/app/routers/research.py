@@ -1,5 +1,5 @@
 """Company research aggregation endpoint — parallel fetches from financialdatasets + yfinance."""
-import asyncio, json, logging
+import asyncio, json, logging, re
 from datetime import datetime, timezone
 
 import httpx
@@ -18,7 +18,7 @@ router   = APIRouter(prefix="/research", tags=["research"])
 
 
 def _cache_key(ticker: str) -> str:
-    return f"research6:{ticker.upper()}"
+    return f"research7:{ticker.upper()}"
 
 
 async def _fd(client: httpx.AsyncClient, path: str, params: dict) -> dict:
@@ -218,22 +218,110 @@ def _yf_extended(sym: str, annual_income: list) -> dict:
     return {"earnings_history": earnings_history, "pe_history": pe_history}
 
 
+def _build_trends(income: list, cashflow: list, metrics_history: list, is_quarterly: bool = False) -> dict:
+    """Build chart-ready aligned trend datasets from financial statements + metrics history."""
+
+    def period_label(rp: str, fp: str = "") -> str:
+        if is_quarterly:
+            m = re.search(r"Q\d", fp or "")
+            return f"{m.group()}'{rp[2:4]}" if m else rp[:7]
+        return rp[:4]
+
+    mh_map = {row.get("report_period", ""): row for row in metrics_history}
+    cf_map = {row.get("report_period", ""): row for row in cashflow}
+
+    revenue_trend: list[dict] = []
+    eps_trend:     list[dict] = []
+    fcf_trend:     list[dict] = []
+    margins_trend: list[dict] = []
+
+    # income is newest-first from API; reverse for chronological order
+    for stmt in reversed(income):
+        rp = stmt.get("report_period", "")
+        fp = stmt.get("fiscal_period", "")
+        pl = period_label(rp, fp)
+        mh = mh_map.get(rp, {})
+
+        rev = stmt.get("revenue")
+        if rev is not None:
+            rg = mh.get("revenue_growth")
+            revenue_trend.append({
+                "period": pl, "report_period": rp,
+                "value": rev,
+                "growth": round(rg * 100, 1) if rg is not None else None,
+            })
+
+        eps = stmt.get("earnings_per_share_diluted") or stmt.get("earnings_per_share")
+        if eps is not None:
+            eg = mh.get("earnings_per_share_growth")
+            eps_trend.append({
+                "period": pl, "report_period": rp,
+                "value": round(float(eps), 4),
+                "growth": round(eg * 100, 1) if eg is not None else None,
+            })
+
+        if rev:
+            gross  = stmt.get("gross_profit")
+            op_inc = stmt.get("operating_income")
+            net    = stmt.get("net_income")
+            margins_trend.append({
+                "period": pl, "report_period": rp,
+                "gross":     round(gross  / rev * 100, 2) if gross  is not None else None,
+                "operating": round(op_inc / rev * 100, 2) if op_inc is not None else None,
+                "net":       round(net    / rev * 100, 2) if net    is not None else None,
+            })
+
+        cf  = cf_map.get(rp, {})
+        fcf = cf.get("free_cash_flow")
+        if fcf is not None:
+            fg = mh.get("free_cash_flow_growth")
+            fcf_trend.append({
+                "period": pl, "report_period": rp,
+                "value": fcf,
+                "growth": round(fg * 100, 1) if fg is not None else None,
+            })
+
+    returns_trend: list[dict] = []
+    for mh in reversed(metrics_history):
+        rp  = mh.get("report_period", "")
+        fp  = mh.get("fiscal_period", "")
+        roe  = mh.get("return_on_equity")
+        roa  = mh.get("return_on_assets")
+        roic = mh.get("return_on_invested_capital")
+        if any(v is not None for v in [roe, roa, roic]):
+            returns_trend.append({
+                "period": period_label(rp, fp), "report_period": rp,
+                "roe":  round(roe  * 100, 1) if roe  is not None else None,
+                "roa":  round(roa  * 100, 1) if roa  is not None else None,
+                "roic": round(roic * 100, 1) if roic is not None else None,
+            })
+
+    return {
+        "revenue":        revenue_trend,
+        "eps":            eps_trend,
+        "free_cash_flow": fcf_trend,
+        "margins":        margins_trend,
+        "returns":        returns_trend,
+    }
+
+
 def _compute_insights(sym: str, data: dict) -> dict:
     bull = []
     bear = []
     catalysts = []
     risks = []
 
-    m = data.get("metrics") or {}
-    p = data.get("profile") or {}
-    ttm = data.get("income_ttm") or {}
-    bttm = data.get("balance_ttm") or {}
-    cttm = data.get("cashflow_ttm") or {}
-    income = data.get("income") or []
+    m = (data.get("metrics") or {}).get("snapshot") or {}
+    p = (data.get("overview") or {}).get("profile") or {}
+    fin = data.get("financials") or {}
+    ttm = fin.get("income_ttm") or {}
+    bttm = fin.get("balance_ttm") or {}
+    cttm = fin.get("cashflow_ttm") or {}
+    income = fin.get("income_annual") or []
     earnings_history = data.get("earnings_history") or []
     segments = data.get("segments") or []
-    estimates_annual = data.get("estimates_annual") or []
-    company = data.get("company") or {}
+    estimates_annual = (data.get("estimates") or {}).get("annual") or []
+    company = (data.get("overview") or {}).get("company") or {}
 
     # Revenue growth
     rev_growth = m.get("revenue_growth") or p.get("revenue_growth")
@@ -401,9 +489,10 @@ def _compute_insights(sym: str, data: dict) -> dict:
 
 def _detect_anomalies(data: dict) -> list[dict]:
     anomalies = []
-    income = data.get("income") or []   # newest first from API
-    balance = data.get("balance") or []
-    cashflow = data.get("cashflow") or []
+    fin = data.get("financials") or {}
+    income   = fin.get("income_annual")   or []   # newest first from API
+    balance  = fin.get("balance_annual")  or []
+    cashflow = fin.get("cashflow_annual") or []
 
     # ── Revenue anomalies ──────────────────────────────────────
     # Need at least 3 periods
@@ -743,37 +832,67 @@ async def get_research(
         metrics_snapshot = _mraw or None
 
     response = {
-        "ticker":       sym,
-        "computed_at":  datetime.now(timezone.utc).isoformat(),
-        "company":      facts_r.get("company_facts", {}),
-        "snapshot":     snapshot_r.get("snapshot", {}),
-        "metrics":      metrics_snapshot,
-        "income":                  income_ann,
-        "income_ttm":              income_ttm,
-        "income_quarterly":        income_q,
-        "balance":                 balance_ann,
-        "balance_ttm":             balance_ttm,
-        "balance_quarterly":       balance_q,
-        "cashflow":                cashflow_ann,
-        "cashflow_ttm":            cashflow_ttm,
-        "cashflow_quarterly":      cashflow_q,
-        "metrics_history_annual":    metrics_hist_annual,
-        "metrics_history_quarterly": metrics_hist_quarterly,
-        "ownership":         ownership_r.get("institutional_ownership", []),
-        "insider_trades":    insider_r.get("insider_trades", []),
-        "estimates_annual":    estimates_ann_r.get("analyst_estimates", []),
-        "estimates_quarterly": estimates_q_r.get("analyst_estimates",   []),
-        "news":              news_r.get("news", []),
-        "segments":          segments_ann_r.get("segmented_revenues",   []),
-        "peers":             peers,
-        "earnings_history":  yf_ext.get("earnings_history", []),
-        "pe_history":        yf_ext.get("pe_history", []),
-        "profile":           profile,
+        "ticker":      sym,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+
+        "overview": {
+            "company":  facts_r.get("company_facts", {}),
+            "profile":  profile,
+            "snapshot": snapshot_r.get("snapshot", {}),
+        },
+
+        "financials": {
+            "income_annual":    income_ann,
+            "income_quarterly": income_q,
+            "income_ttm":       income_ttm,
+            "balance_annual":    balance_ann,
+            "balance_quarterly": balance_q,
+            "balance_ttm":       balance_ttm,
+            "cashflow_annual":    cashflow_ann,
+            "cashflow_quarterly": cashflow_q,
+            "cashflow_ttm":       cashflow_ttm,
+        },
+
+        "metrics": {
+            "snapshot":          metrics_snapshot,
+            "history_annual":    metrics_hist_annual,
+            "history_quarterly": metrics_hist_quarterly,
+        },
+
+        "trends": {
+            "annual":    _build_trends(income_ann, cashflow_ann, metrics_hist_annual,    False),
+            "quarterly": _build_trends(income_q,   cashflow_q,   metrics_hist_quarterly, True),
+        },
+
+        "research": {
+            "peers":         peers,
+            "ownership":     ownership_r.get("institutional_ownership", []),
+            "insider_trades": insider_r.get("insider_trades", []),
+        },
+
+        "estimates": {
+            "annual":    estimates_ann_r.get("analyst_estimates", []),
+            "quarterly": estimates_q_r.get("analyst_estimates",   []),
+        },
+
+        "valuation": {
+            "pe_history": yf_ext.get("pe_history", []),
+        },
+
+        "segments":         segments_ann_r.get("segmented_revenues", []),
+        "earnings_history": yf_ext.get("earnings_history", []),
+
+        "analysis": {
+            "insights":  None,
+            "anomalies": [],
+        },
+
+        "news": news_r.get("news", []),
     }
 
     insights = _compute_insights(sym, response)
-    response["insights"] = insights
-    response["anomalies"] = _detect_anomalies(response)
+    response["analysis"]["insights"]  = insights
+    response["analysis"]["anomalies"] = _detect_anomalies(response)
 
     await cache.set(cache_key, json.dumps(response, default=str), 3600)
     return response

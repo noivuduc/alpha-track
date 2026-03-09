@@ -35,9 +35,9 @@ export default function CompanySummaryBar({ data, sentinelRef }: Props) {
 
   if (!visible) return null;
 
-  const snap     = data.snapshot;
+  const snap     = data.overview.snapshot;
   const positive = (snap.day_change ?? 0) >= 0;
-  const revenue  = data.income_ttm?.revenue;
+  const revenue  = data.financials.income_ttm?.revenue;
 
   return (
     <div className="fixed top-12 left-0 right-0 z-40 bg-zinc-900/97 backdrop-blur-sm border-b border-zinc-800 shadow-lg">
@@ -49,7 +49,7 @@ export default function CompanySummaryBar({ data, sentinelRef }: Props) {
           </div>
           <span className="font-mono font-semibold text-blue-400">{data.ticker}</span>
           <span className="text-zinc-400 hidden sm:block truncate max-w-[180px]">
-            {data.company.name}
+            {data.overview.company.name}
           </span>
         </div>
 
@@ -69,20 +69,20 @@ export default function CompanySummaryBar({ data, sentinelRef }: Props) {
 
         {/* Key stats — hidden on small screens */}
         <div className="hidden md:flex items-center gap-5 text-zinc-400 shrink-0">
-          {data.profile.market_cap != null && (
-            <span>Mkt Cap <span className="text-zinc-200 font-mono">{fmtLarge(data.profile.market_cap)}</span></span>
+          {data.overview.profile.market_cap != null && (
+            <span>Mkt Cap <span className="text-zinc-200 font-mono">{fmtLarge(data.overview.profile.market_cap)}</span></span>
           )}
-          {data.profile.pe_ratio != null && (
-            <span>P/E <span className="text-zinc-200 font-mono">{fmt(data.profile.pe_ratio, 1)}</span></span>
+          {data.overview.profile.pe_ratio != null && (
+            <span>P/E <span className="text-zinc-200 font-mono">{fmt(data.overview.profile.pe_ratio, 1)}</span></span>
           )}
           {revenue != null && (
             <span>Rev TTM <span className="text-zinc-200 font-mono">{fmtLarge(revenue)}</span></span>
           )}
-          {data.profile.week52_high != null && (
-            <span>52W H <span className="text-zinc-200 font-mono">${fmt(data.profile.week52_high)}</span></span>
+          {data.overview.profile.week52_high != null && (
+            <span>52W H <span className="text-zinc-200 font-mono">${fmt(data.overview.profile.week52_high)}</span></span>
           )}
-          {data.profile.week52_low != null && (
-            <span>52W L <span className="text-zinc-200 font-mono">${fmt(data.profile.week52_low)}</span></span>
+          {data.overview.profile.week52_low != null && (
+            <span>52W L <span className="text-zinc-200 font-mono">${fmt(data.overview.profile.week52_low)}</span></span>
           )}
         </div>
       </div>

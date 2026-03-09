@@ -18,9 +18,9 @@ function fmtLargeNum(n: number | undefined | null): string {
 interface Props { data: ResearchData; onRefresh: () => void; refreshing: boolean; }
 
 export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
-  const snap     = data.snapshot;
-  const company  = data.company;
-  const profile  = data.profile;
+  const snap     = data.overview.snapshot;
+  const company  = data.overview.company;
+  const profile  = data.overview.profile;
   const positive = (snap.day_change ?? 0) >= 0;
 
   const change    = snap.day_change;

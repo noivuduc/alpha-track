@@ -120,26 +120,21 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
 
   if (!data) return null;
 
-  const {
-    company, profile, income, balance, cashflow,
-    income_quarterly, balance_quarterly, cashflow_quarterly,
-    metrics, ownership, insider_trades, estimates_annual, estimates_quarterly,
-    news, segments, peers, earnings_history, pe_history, anomalies,
-    metrics_history_annual, metrics_history_quarterly,
-  } = data;
+  const { ticker: sym, overview, financials, metrics, trends, research, estimates, valuation, segments, earnings_history, analysis, news } = data;
+  const { company, profile, snapshot } = overview;
 
-  const hasFinancials    = income.length > 0;
-  const hasSegments      = segments?.length > 0;
-  const hasPeers         = peers && peers.length > 0;
-  const hasEarnings      = earnings_history && earnings_history.length > 0;
-  const hasPeHistory     = pe_history && pe_history.length > 0;
+  const hasFinancials = financials.income_annual.length > 0;
+  const hasSegments   = segments?.length > 0;
+  const hasPeers      = research.peers.length > 0;
+  const hasEarnings   = earnings_history?.length > 0;
+  const hasPeHistory  = valuation.pe_history.length > 0;
 
   const navSections = ALL_NAV.filter(s => {
     if (s.id === "sec-overview"    && !profile.description && !company.sector) return false;
     if (s.id === "sec-trends"      && !hasFinancials) return false;
     if (s.id === "sec-statements"  && !hasFinancials) return false;
     if (s.id === "sec-segments"    && !hasSegments)   return false;
-    if (s.id === "sec-estimates"   && !estimates_annual.length && !estimates_quarterly.length) return false;
+    if (s.id === "sec-estimates"   && !estimates.annual.length && !estimates.quarterly.length) return false;
     if (s.id === "sec-news"        && !news.length)   return false;
     if (s.id === "sec-peers"       && !hasPeers)      return false;
     if (s.id === "sec-earnings"    && !hasEarnings)   return false;
@@ -147,22 +142,22 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
     return true;
   });
 
-  // Build selfMetrics from existing data for peer comparison
+  const snap = overview.snapshot;
   const selfMetrics: PeerMetrics = {
-    symbol:           ticker,
+    symbol:           sym,
     name:             company.name,
     market_cap:       profile.market_cap,
-    price:            data.snapshot.price,
-    day_change_pct:   data.snapshot.day_change_percent,
-    revenue_growth:   metrics?.revenue_growth ?? profile.revenue_growth,
-    gross_margin:     metrics?.gross_margin    ?? profile.gross_margins,
-    operating_margin: metrics?.operating_margin ?? profile.operating_margins,
-    net_margin:       metrics?.net_margin       ?? profile.profit_margins,
-    roic:             metrics?.return_on_invested_capital,
-    pe:               profile.pe_ratio ?? metrics?.price_to_earnings_ratio,
-    ev_ebitda:        profile.ev_ebitda ?? metrics?.enterprise_value_to_ebitda_ratio,
-    ps:               profile.price_to_sales ?? metrics?.price_to_sales_ratio,
-    fcf_yield:        metrics?.free_cash_flow_yield,
+    price:            snap.price,
+    day_change_pct:   snap.day_change_percent,
+    revenue_growth:   metrics.snapshot?.revenue_growth ?? profile.revenue_growth,
+    gross_margin:     metrics.snapshot?.gross_margin    ?? profile.gross_margins,
+    operating_margin: metrics.snapshot?.operating_margin ?? profile.operating_margins,
+    net_margin:       metrics.snapshot?.net_margin       ?? profile.profit_margins,
+    roic:             metrics.snapshot?.return_on_invested_capital,
+    pe:               profile.pe_ratio ?? metrics.snapshot?.price_to_earnings_ratio,
+    ev_ebitda:        profile.ev_ebitda ?? metrics.snapshot?.enterprise_value_to_ebitda_ratio,
+    ps:               profile.price_to_sales ?? metrics.snapshot?.price_to_sales_ratio,
+    fcf_yield:        metrics.snapshot?.free_cash_flow_yield,
   };
 
   const periodToggle = (
@@ -281,9 +276,9 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             )}
 
             {/* 2. Investment Insights — bull case + catalysts */}
-            {data.insights && (
+            {analysis.insights && (
               <SectionPanel title="Investment Insights" id="sec-insights">
-                <InvestmentInsights insights={data.insights} sections={["bull", "catalysts"]} />
+                <InvestmentInsights insights={analysis.insights} sections={["bull", "catalysts"]} />
               </SectionPanel>
             )}
 
@@ -301,20 +296,17 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             {hasFinancials && (
               <SectionPanel title="Financial Trends" action={periodToggle} id="sec-trends">
                 <FinancialTrends
-                  income={income} cashflow={cashflow}
-                  incomeQ={income_quarterly} cashflowQ={cashflow_quarterly}
-                  balance={balance} balanceQ={balance_quarterly}
-                  profile={profile} period={finPeriod}
-                  metricsHistoryAnnual={metrics_history_annual}
-                  metricsHistoryQuarterly={metrics_history_quarterly}
+                  annual={trends.annual}
+                  quarterly={trends.quarterly}
+                  period={finPeriod}
                 />
               </SectionPanel>
             )}
 
             {/* 5b. Financial Signals */}
-            {anomalies && anomalies.length > 0 && (
+            {analysis.anomalies.length > 0 && (
               <SectionPanel title="Financial Signals" id="sec-signals">
-                <FinancialSignals anomalies={anomalies} />
+                <FinancialSignals anomalies={analysis.anomalies} />
               </SectionPanel>
             )}
 
@@ -329,8 +321,8 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             {hasFinancials && (
               <SectionPanel title="Financial Statements" id="sec-statements">
                 <FinancialStatements
-                  income={income} balance={balance} cashflow={cashflow}
-                  incomeQ={income_quarterly} balanceQ={balance_quarterly} cashflowQ={cashflow_quarterly}
+                  income={financials.income_annual} balance={financials.balance_annual} cashflow={financials.cashflow_annual}
+                  incomeQ={financials.income_quarterly} balanceQ={financials.balance_quarterly} cashflowQ={financials.cashflow_quarterly}
                   period={finPeriod} onPeriodChange={setFinPeriod}
                 />
               </SectionPanel>
@@ -339,40 +331,40 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             {/* 8. Historical Valuation */}
             {hasPeHistory && (
               <SectionPanel title="Historical Valuation" id="sec-val-history">
-                <HistoricalValuation peHistory={pe_history!} currentPe={profile.pe_ratio ?? metrics?.price_to_earnings_ratio} />
+                <HistoricalValuation peHistory={valuation.pe_history} currentPe={profile.pe_ratio ?? metrics.snapshot?.price_to_earnings_ratio} />
               </SectionPanel>
             )}
 
             {/* 9. Peer Comparison */}
             {hasPeers && (
               <SectionPanel title="Peer Comparison" id="sec-peers">
-                <PeerComparison ticker={ticker} selfMetrics={selfMetrics} peers={peers!} />
+                <PeerComparison ticker={sym} selfMetrics={selfMetrics} peers={research.peers} />
               </SectionPanel>
             )}
 
             {/* 10. Analyst Estimates */}
-            {(estimates_annual.length > 0 || estimates_quarterly.length > 0) && (
+            {(estimates.annual.length > 0 || estimates.quarterly.length > 0) && (
               <SectionPanel title="Analyst Estimates" id="sec-estimates">
-                <EstimatesSection annual={estimates_annual} quarterly={estimates_quarterly} />
+                <EstimatesSection annual={estimates.annual} quarterly={estimates.quarterly} />
               </SectionPanel>
             )}
 
             {/* 11. Earnings Reaction */}
             {hasEarnings && (
               <SectionPanel title="Earnings Reaction" id="sec-earnings">
-                <EarningsReaction earnings={earnings_history!} />
+                <EarningsReaction earnings={earnings_history} />
               </SectionPanel>
             )}
 
             {/* 12. Ownership */}
             <SectionPanel title="Ownership & Insider Transactions" id="sec-ownership">
-              <OwnershipSection ownership={ownership} insider_trades={insider_trades} profile={profile} />
+              <OwnershipSection ownership={research.ownership} insider_trades={research.insider_trades} profile={profile} />
             </SectionPanel>
 
             {/* 13. Key Risks — bear case + risks from insights */}
-            {data.insights && (
+            {analysis.insights && (
               <SectionPanel title="Key Risks" defaultOpen={false} id="sec-risks">
-                <InvestmentInsights insights={data.insights} sections={["bear", "risks"]} />
+                <InvestmentInsights insights={analysis.insights} sections={["bear", "risks"]} />
               </SectionPanel>
             )}
 

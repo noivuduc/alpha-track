@@ -62,11 +62,11 @@ function Section({ title, metrics }: { title: string; metrics: MetricDef[] }) {
 }
 
 function buildMetrics(data: ResearchData): { title: string; metrics: MetricDef[] }[] {
-  const m = data.metrics as FinancialMetrics | null;
-  const p = data.profile as CompanyProfile;
-  const ttm  = data.income_ttm;
-  const bttm = data.balance_ttm;
-  const cttm = data.cashflow_ttm;
+  const m = data.metrics.snapshot as FinancialMetrics | null;
+  const p = data.overview.profile as CompanyProfile;
+  const ttm  = data.financials.income_ttm;
+  const bttm = data.financials.balance_ttm;
+  const cttm = data.financials.cashflow_ttm;
 
   // Helper to prefer metrics API, fallback to profile
   const pctM = (mKey: keyof FinancialMetrics, pKey: keyof CompanyProfile, decimalInProfile = true) => {
