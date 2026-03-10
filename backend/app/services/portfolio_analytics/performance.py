@@ -1,17 +1,19 @@
 """
 Performance chart series and summary statistics.
 
-Functions here generate chart-ready data structures for the frontend:
-drawdown series, monthly return heatmap, benchmark comparison,
-growth-of-$100, return distribution, and derived metrics summary.
+NumPy is used for drawdown computation, skewness/kurtosis, and
+any bulk array operations.  List outputs preserve API compatibility.
 """
 from __future__ import annotations
 
-import math
 import statistics as _stats
 
-from .constants import MONTHS, TRADING_YR
-from .math_utils import mean, std, pct_change
+import numpy as np
+
+from datetime import date as _date  # noqa: E402 — used inside compute_daily_return_heatmap
+
+from .constants import MONTHS
+from .math_utils import pct_change
 
 
 def drawdown_series(dates: list[str], closes: list[float]) -> list[dict]:
@@ -19,20 +21,19 @@ def drawdown_series(dates: list[str], closes: list[float]) -> list[dict]:
     Running peak-to-trough drawdown at each date.
 
     Returns list of {"date": str, "drawdown": float (negative %)}.
+    Uses np.maximum.accumulate for O(n) vectorised computation.
     """
     if not closes:
         return []
-    peak = closes[0]
-    out  = []
-    for i, v in enumerate(closes):
-        if v > peak:
-            peak = v
-        dd = (v - peak) / peak * 100 if peak else 0.0
-        out.append({
-            "date":     dates[i] if i < len(dates) else "",
-            "drawdown": round(dd, 4),
-        })
-    return out
+    c           = np.asarray(closes, dtype=np.float64)
+    running_max = np.maximum.accumulate(c)
+    dd          = np.where(running_max > 0, (c - running_max) / running_max * 100, 0.0)
+    dd_r        = np.round(dd, 4)
+    nd          = len(dates)
+    return [
+        {"date": dates[i] if i < nd else "", "drawdown": float(dd_r[i])}
+        for i in range(len(c))
+    ]
 
 
 def monthly_returns(dates: list[str], values: list[float]) -> list[dict]:
@@ -66,15 +67,12 @@ def monthly_returns(dates: list[str], values: list[float]) -> list[dict]:
 
 
 def performance_series(
-    dates:             list[str],
-    portfolio_values:  list[float],
-    benchmark_values:  dict[str, list[float]],
+    dates:            list[str],
+    portfolio_values: list[float],
+    benchmark_values: dict[str, list[float]],
 ) -> list[dict]:
     """
     Normalise portfolio and benchmarks to 100 at t=0 for apples-to-apples comparison.
-
-    Args:
-        benchmark_values: {"SPY": [100, 101, ...], "QQQ": [...]}
 
     Returns list of {"date", "portfolio", "spy"?, "qqq"?}.
     """
@@ -84,7 +82,6 @@ def performance_series(
     base_p  = portfolio_values[0] if portfolio_values[0] else 1.0
     b_bases = {k: (v[0] if v and v[0] else 1.0) for k, v in benchmark_values.items()}
 
-    # Map benchmark keys to canonical field names
     _key_map = {"SPY": "spy", "QQQ": "qqq"}
 
     out = []
@@ -94,7 +91,7 @@ def performance_series(
             pt["portfolio"] = round(portfolio_values[i] / base_p * 100, 2)
         for k, vals in benchmark_values.items():
             if i < len(vals) and vals[i]:
-                field = _key_map.get(k.upper(), "benchmark")
+                field    = _key_map.get(k.upper(), "benchmark")
                 pt[field] = round(vals[i] / b_bases[k] * 100, 2)
         out.append(pt)
     return out
@@ -140,17 +137,125 @@ def compute_return_distribution(returns: list[float]) -> dict:
 
     Returns {"skewness": float | None, "kurtosis": float | None}.
     Negative skewness → left tail; kurtosis > 0 → fat tails (leptokurtic).
+
+    NumPy vectorises the moment calculations.
     """
     if len(returns) < 4:
         return {"skewness": None, "kurtosis": None}
-    n = len(returns)
-    m = mean(returns)
-    s = std(returns)
-    if s == 0:
+    r = np.asarray(returns, dtype=np.float64)
+    s = float(r.std(ddof=1))
+    if s == 0.0:
         return {"skewness": 0.0, "kurtosis": 0.0}
-    skew = (sum((r - m) ** 3 for r in returns) / n) / (s ** 3)
-    kurt = (sum((r - m) ** 4 for r in returns) / n) / (s ** 4) - 3.0
+    centered = r - r.mean()
+    skew = float(np.mean(centered ** 3) / s ** 3)
+    kurt = float(np.mean(centered ** 4) / s ** 4) - 3.0
     return {"skewness": round(skew, 4), "kurtosis": round(kurt, 4)}
+
+
+def compute_daily_return_heatmap(
+    dates:   list[str],
+    returns: list[float],
+) -> list[dict]:
+    """
+    Build a calendar-heatmap-ready series from daily portfolio returns.
+
+    Each entry contains the full date decomposition so the frontend can
+    render calendar, weekly, or GitHub-style contribution grids without
+    any additional date parsing.
+
+    Args:
+        dates:   trading dates aligned 1-to-1 with returns (YYYY-MM-DD)
+        returns: daily returns in decimal form (e.g. 0.0082 = +0.82 %)
+
+    Returns:
+        List of {"date", "year", "month", "day", "weekday", "return_pct"}
+        Length equals min(len(dates), len(returns)).
+        weekday: 0 = Monday … 6 = Sunday  (ISO weekday − 1).
+        return_pct is rounded to 2 decimal places.
+    """
+    n      = min(len(dates), len(returns))
+    result = []
+    for i in range(n):
+        d   = dates[i]
+        # Parse once, avoid datetime import overhead with slicing
+        y, m, day = int(d[:4]), int(d[5:7]), int(d[8:10])
+        wd = _date(y, m, day).weekday()   # 0=Mon … 6=Sun
+        result.append({
+            "date":       d,
+            "year":       y,
+            "month":      m,
+            "day":        day,
+            "weekday":    wd,
+            "return_pct": round(returns[i] * 100, 2),
+        })
+    return result
+
+
+def compute_weekly_returns(dates: list[str], values: list[float]) -> list[dict]:
+    """
+    Aggregate daily portfolio values into ISO weekly returns.
+
+    First value of each ISO week = open; last value = close.
+    Returns list of {week, year, week_number, return_pct}.
+    """
+    if len(dates) < 2 or len(dates) != len(values):
+        return []
+
+    # Use insertion order to preserve chronological sequence
+    order: list[str] = []
+    buckets: dict[str, tuple[float, float, int, int]] = {}
+
+    for d_str, v in zip(dates, values):
+        y, m, day = int(d_str[:4]), int(d_str[5:7]), int(d_str[8:10])
+        iso_year, iso_week, _ = _date(y, m, day).isocalendar()
+        key = f"{iso_year}-W{iso_week:02d}"
+        if key not in buckets:
+            order.append(key)
+            buckets[key] = (v, v, iso_year, iso_week)
+        else:
+            first_v, _, yr, wk = buckets[key]
+            buckets[key] = (first_v, v, yr, wk)
+
+    result = []
+    for key in order:
+        first_v, last_v, yr, wk = buckets[key]
+        ret = (last_v / first_v - 1) * 100 if first_v else 0.0
+        result.append({
+            "week":        key,
+            "year":        yr,
+            "week_number": wk,
+            "return_pct":  round(ret, 4),
+        })
+    return result
+
+
+def compute_period_extremes(
+    daily_heatmap:   list[dict],
+    weekly_returns:  list[dict],
+    monthly_returns: list[dict],
+) -> dict:
+    """
+    Best and worst return for each time granularity (day / week / month).
+    Returns {best_day_pct, worst_day_pct, best_week_pct, worst_week_pct,
+             best_month_pct, worst_month_pct} — each float or None.
+    """
+    def _extremes(vals: list[float]) -> tuple[float | None, float | None]:
+        if not vals:
+            return None, None
+        return round(max(vals), 4), round(min(vals), 4)
+
+    best_day,   worst_day   = _extremes([d["return_pct"] for d in daily_heatmap])
+    best_week,  worst_week  = _extremes([w["return_pct"] for w in weekly_returns])
+    best_month, worst_month = _extremes([m["value"]      for m in monthly_returns])
+
+    return {
+        "best_day_pct":    best_day,
+        "worst_day_pct":   worst_day,
+        "best_week_pct":   best_week,
+        "worst_week_pct":  worst_week,
+        "best_month_pct":  best_month,
+        "worst_month_pct": worst_month,
+    }
 
 
 def compute_derived_metrics(
@@ -196,17 +301,17 @@ def compute_derived_metrics(
         "portfolio_return_pct": port_ret,
         "spy_return_pct":       spy_ret,
         "qqq_return_pct":       qqq_ret,
-        "alpha_vs_spy_pct":     round(port_ret - spy_ret, 4) if port_ret is not None and spy_ret is not None else None,
-        "alpha_vs_qqq_pct":     round(port_ret - qqq_ret, 4) if port_ret is not None and qqq_ret is not None else None,
+        "alpha_vs_spy_pct":     round(port_ret - spy_ret, 4) if port_ret is not None and spy_ret  is not None else None,
+        "alpha_vs_qqq_pct":     round(port_ret - qqq_ret, 4) if port_ret is not None and qqq_ret  is not None else None,
     }
 
     best_day = worst_day = avg_day = median_day = None
     if port_returns:
-        r_pct      = [r * 100 for r in port_returns]
-        best_day   = round(max(r_pct), 4)
-        worst_day  = round(min(r_pct), 4)
-        avg_day    = round(sum(r_pct) / len(r_pct), 4)
-        median_day = round(_stats.median(r_pct), 4)
+        r_pct      = np.asarray(port_returns, dtype=np.float64) * 100
+        best_day   = round(float(r_pct.max()),  4)
+        worst_day  = round(float(r_pct.min()),  4)
+        avg_day    = round(float(r_pct.mean()), 4)
+        median_day = round(float(np.median(r_pct)), 4)
 
     current_dd    = drawdown_data[-1]["drawdown"] if drawdown_data else None
     recovery_days = 0

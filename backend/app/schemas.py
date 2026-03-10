@@ -301,11 +301,36 @@ class DrawdownPoint(BaseModel):
     drawdown: float          # negative %, e.g. -12.3
 
 
+class DailyHeatmapPoint(BaseModel):
+    date:       str
+    year:       int
+    month:      int
+    day:        int
+    weekday:    int          # 0 = Monday … 6 = Sunday
+    return_pct: float        # %, e.g. -1.25
+
+
 class MonthlyReturn(BaseModel):
     year:  int
     month: int
     label: str
     value: float             # %, e.g. 2.3
+
+
+class WeeklyReturn(BaseModel):
+    week:        str          # ISO week label, e.g. "2026-W10"
+    year:        int
+    week_number: int
+    return_pct:  float        # %, e.g. 1.85
+
+
+class PeriodExtremes(BaseModel):
+    best_day_pct:    float | None = None
+    worst_day_pct:   float | None = None
+    best_week_pct:   float | None = None
+    worst_week_pct:  float | None = None
+    best_month_pct:  float | None = None
+    worst_month_pct: float | None = None
 
 
 class PortfolioAnalytics(BaseModel):
@@ -344,6 +369,9 @@ class PortfolioAnalytics(BaseModel):
     volatility_regime:       list[VolatilityRegimePoint]      | None = None
     rolling_drawdown_6m:     list[DrawdownPoint]              | None = None
     growth_of_100:           list[GrowthPoint]                | None = None
+    daily_heatmap:           list[DailyHeatmapPoint]          | None = None
+    weekly_returns:          list[WeeklyReturn]               | None = None
+    period_extremes:         PeriodExtremes                   | None = None
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 class AdminStats(BaseModel):

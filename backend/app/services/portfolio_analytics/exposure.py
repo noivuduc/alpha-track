@@ -1,11 +1,14 @@
 """
 Portfolio exposure and concentration metrics:
 HHI, top-N weight concentration, market capture ratios, turnover.
+
+NumPy vectorises the final weight and capture computations.
 """
 from __future__ import annotations
 
+import numpy as np
+
 from .constants import TRADING_YR
-from .math_utils import mean
 
 
 def compute_exposure_metrics(
@@ -45,15 +48,15 @@ def compute_exposure_metrics(
     if total_value <= 0:
         return {}
 
-    weights = sorted(
-        [v / total_value for v in by_ticker.values()],
-        reverse=True,
-    )
+    # Vectorised weight computation and sorting
+    w = np.asarray(list(by_ticker.values()), dtype=np.float64) / total_value
+    w_sorted = np.sort(w)[::-1]   # descending
+
     return {
-        "largest_position_weight": round(weights[0] * 100, 2) if weights else 0.0,
-        "top3_weight":             round(sum(weights[:3]) * 100, 2),
-        "top5_weight":             round(sum(weights[:5]) * 100, 2),
-        "herfindahl_index":        round(sum(w * w for w in weights), 4),
+        "largest_position_weight": round(float(w_sorted[0]) * 100, 2) if len(w_sorted) > 0 else 0.0,
+        "top3_weight":             round(float(w_sorted[:3].sum()) * 100, 2),
+        "top5_weight":             round(float(w_sorted[:5].sum()) * 100, 2),
+        "herfindahl_index":        round(float(np.sum(w_sorted ** 2)), 4),
     }
 
 
@@ -67,22 +70,25 @@ def compute_capture_ratios(
     upside_capture_ratio  > 1 → aggressive
     downside_capture_ratio < 1 → defensive
     """
-    n = min(len(port_returns), len(mkt_returns))
+    n     = min(len(port_returns), len(mkt_returns))
     empty = {"upside_capture_ratio": None, "downside_capture_ratio": None}
     if n < 20:
         return empty
 
-    pr, mr = port_returns[:n], mkt_returns[:n]
-    up_p = [pr[i] for i in range(n) if mr[i] > 0]
-    up_m = [mr[i] for i in range(n) if mr[i] > 0]
-    dn_p = [pr[i] for i in range(n) if mr[i] < 0]
-    dn_m = [mr[i] for i in range(n) if mr[i] < 0]
+    pr = np.asarray(port_returns[:n], dtype=np.float64)
+    mr = np.asarray(mkt_returns[:n],  dtype=np.float64)
 
-    m_up = mean(up_m) if up_m else 0.0
-    m_dn = mean(dn_m) if dn_m else 0.0
+    up_mask = mr > 0
+    dn_mask = mr < 0
 
-    upside   = round(mean(up_p) / m_up, 4) if (up_p and m_up != 0) else None
-    downside = round(mean(dn_p) / m_dn, 4) if (dn_p and m_dn != 0) else None
+    up_p, up_m = pr[up_mask], mr[up_mask]
+    dn_p, dn_m = pr[dn_mask], mr[dn_mask]
+
+    m_up = float(up_m.mean()) if len(up_m) > 0 else 0.0
+    m_dn = float(dn_m.mean()) if len(dn_m) > 0 else 0.0
+
+    upside   = round(float(up_p.mean()) / m_up, 4) if (len(up_p) > 0 and m_up != 0) else None
+    downside = round(float(dn_p.mean()) / m_dn, 4) if (len(dn_p) > 0 and m_dn != 0) else None
     return {"upside_capture_ratio": upside, "downside_capture_ratio": downside}
 
 
@@ -123,10 +129,16 @@ def compute_turnover_pct(
         total = sum(byt.values())
         return {t: v / total for t, v in byt.items()} if total > 0 else {}
 
-    w_start   = _weights(0)
-    w_end     = _weights(len(active_dates) - 1)
-    tickers   = set(w_start) | set(w_end)
-    half_turn = sum(abs(w_end.get(t, 0.0) - w_start.get(t, 0.0)) for t in tickers) / 2
+    w_start = _weights(0)
+    w_end   = _weights(len(active_dates) - 1)
+    tickers = set(w_start) | set(w_end)
+
+    # Vectorised half-turnover
+    delta     = np.asarray(
+        [abs(w_end.get(t, 0.0) - w_start.get(t, 0.0)) for t in tickers],
+        dtype=np.float64,
+    )
+    half_turn = float(delta.sum()) / 2.0
 
     ann_factor = TRADING_YR / len(active_dates)
     return round(half_turn * ann_factor * 100, 2)

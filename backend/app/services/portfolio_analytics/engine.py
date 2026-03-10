@@ -29,7 +29,8 @@ from .positions   import compute_position_analytics, compute_position_summary  #
 from .performance import (
     performance_series, monthly_returns, drawdown_series,
     compute_growth_of_100, compute_return_distribution,
-    compute_derived_metrics,
+    compute_derived_metrics, compute_daily_return_heatmap,
+    compute_weekly_returns, compute_period_extremes,
 )
 from .exposure import (
     compute_exposure_metrics,
@@ -67,6 +68,9 @@ _EMPTY_RESULT: dict = {
     "volatility_regime":       [],
     "rolling_drawdown_6m":     [],
     "growth_of_100":           [],
+    "daily_heatmap":           [],
+    "weekly_returns":          [],
+    "period_extremes":         None,
 }
 
 
@@ -231,6 +235,15 @@ def compute_engine(
     # ── Step 21: Return distribution (skewness / kurtosis) ────────────────────
     ret_dist = compute_return_distribution(port_returns)
 
+    # ── Step 22: Daily return heatmap ─────────────────────────────────────────
+    daily_heatmap = compute_daily_return_heatmap(active_dates[1:], port_returns)
+
+    # ── Step 23: Weekly returns ────────────────────────────────────────────────
+    weekly_returns = compute_weekly_returns(active_dates, portfolio_values)
+
+    # ── Step 24: Period extremes (best/worst day / week / month) ──────────────
+    period_extremes = compute_period_extremes(daily_heatmap, weekly_returns, mo_ret)
+
     # ── Populate all performance_metrics additions ─────────────────────────────
     perf_metrics["correlation_spy"] = corr_spy
     perf_metrics["correlation_qqq"] = corr_qqq
@@ -262,6 +275,9 @@ def compute_engine(
         "volatility_regime":       vol_regime,
         "rolling_drawdown_6m":     rolling_mdd_6m,
         "growth_of_100":           growth100,
+        "daily_heatmap":           daily_heatmap,
+        "weekly_returns":          weekly_returns,
+        "period_extremes":         period_extremes,
     }
 
 

@@ -13,6 +13,7 @@ import {
 import { fmt, fmtCurrency, fmtLarge, gainClass } from "@/lib/portfolio-math";
 
 const PerformanceChart = dynamic(() => import("@/components/charts/PerformanceChart"), { ssr: false });
+const ReturnsHeatmap   = dynamic(() => import("@/components/charts/ReturnsHeatmap"),   { ssr: false });
 
 interface Props {
   analytics: PortfolioAnalytics | null;
@@ -635,7 +636,17 @@ export default function OverviewTab({ analytics: a, positions, loading }: Props)
         )}
       </div>
 
-      {/* Row 3 — Contribution to Return */}
+      {/* Rows 3-4 — Unified Returns Heatmap (extremes + daily/weekly/monthly grid) */}
+      {a && (a.monthly_returns?.length || a.daily_heatmap?.length || a.weekly_returns?.length) ? (
+        <ReturnsHeatmap
+          dailyHeatmap={a.daily_heatmap   ?? []}
+          weeklyReturns={a.weekly_returns ?? []}
+          monthlyReturns={a.monthly_returns}
+          periodExtremes={a.period_extremes}
+        />
+      ) : null}
+
+      {/* Row 5 — Contribution to Return */}
       {contribution.length > 0 && (
         <ContributionSection
           rows={contribution}
@@ -644,17 +655,17 @@ export default function OverviewTab({ analytics: a, positions, loading }: Props)
         />
       )}
 
-      {/* Row 4 — Position Analytics Table */}
+      {/* Row 6 — Position Analytics Table */}
       {posAnalytics.length > 0 && (
         <PositionAnalyticsTable rows={posAnalytics} />
       )}
 
-      {/* Row 5 — Rolling Returns */}
+      {/* Row 7 — Rolling Returns */}
       {rollingRet && (
         <RollingReturnsTable data={rollingRet} />
       )}
 
-      {/* Row 6 — Portfolio News */}
+      {/* Row 8 — Portfolio News */}
       {news.length > 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
           <h3 className="text-sm font-semibold text-zinc-300 mb-1">Portfolio News</h3>
