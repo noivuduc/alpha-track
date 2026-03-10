@@ -16,8 +16,12 @@ const TT_STYLE = {
   borderRadius: 8, color: "#e4e4e7", fontSize: 12,
 };
 
-function yoyGrowth(arr: number[]): (number | null)[] {
-  return arr.map((v, i) => i === 0 ? null : arr[i - 1] !== 0 ? ((v - arr[i - 1]) / Math.abs(arr[i - 1])) * 100 : null);
+function yoyGrowth(arr: number[], lookback = 1): (number | null)[] {
+  return arr.map((v, i) => {
+    if (i < lookback) return null;
+    const prev = arr[i - lookback];
+    return prev !== 0 ? ((v - prev) / Math.abs(prev)) * 100 : null;
+  });
 }
 
 interface Props {
@@ -30,14 +34,21 @@ interface Props {
 
 export default function FinancialCharts({ income, cashflow, incomeQ = [], cashflowQ = [], period = "annual" }: Props) {
   const isQ = period === "quarterly";
-  // Oldest → newest for chart order
-  const inc = [...(isQ ? incomeQ  : income)].reverse();
-  const cf  = [...(isQ ? cashflowQ : cashflow)].reverse();
+  // Oldest → newest for chart order (sort ascending by report_period)
+  const inc = [...(isQ ? incomeQ  : income)].sort((a, b) => a.report_period.localeCompare(b.report_period));
+  const cf  = [...(isQ ? cashflowQ : cashflow)].sort((a, b) => a.report_period.localeCompare(b.report_period));
 
   const years = inc.map(r => {
-    if (!isQ) return r.report_period.slice(0, 4);
+    if (!isQ) {
+      // Use fiscal year from fiscal_period if available
+      const fp = r.fiscal_period ?? "";
+      return fp.length >= 4 ? fp.slice(0, 4) : r.report_period.slice(0, 4);
+    }
     const q = r.fiscal_period?.match(/Q\d/)?.[0] ?? "Q?";
-    return `${q}'${r.report_period.slice(2, 4)}`;
+    // Use year from fiscal_period (e.g. "2026-Q4" → "26"), not calendar report_period
+    const fp = r.fiscal_period ?? "";
+    const yr = fp.length >= 4 ? fp.slice(2, 4) : r.report_period.slice(2, 4);
+    return `${q}'${yr}`;
   });
 
   const revs     = inc.map(r => r.revenue       ?? 0);
@@ -51,7 +62,7 @@ export default function FinancialCharts({ income, cashflow, incomeQ = [], cashfl
   const opPct    = inc.map(r => r.revenue && r.operating_income != null ? (r.operating_income / r.revenue * 100) : null);
   const netPct   = inc.map(r => r.revenue && r.net_income      != null ? (r.net_income      / r.revenue * 100) : null);
 
-  const revGrowth = yoyGrowth(revs);
+  const revGrowth = yoyGrowth(revs, isQ ? 4 : 1);
 
   const revenueData = years.map((y, i) => ({
     year: y, revenue: revs[i], growth: revGrowth[i],

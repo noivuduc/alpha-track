@@ -224,8 +224,11 @@ def _build_trends(income: list, cashflow: list, metrics_history: list, is_quarte
     def period_label(rp: str, fp: str = "") -> str:
         if is_quarterly:
             m = re.search(r"Q\d", fp or "")
-            return f"{m.group()}'{rp[2:4]}" if m else rp[:7]
-        return rp[:4]
+            # Use fiscal year from fiscal_period (e.g. "2026-Q4" → "26"), not calendar report_period
+            yr = fp[2:4] if len(fp) >= 4 else rp[2:4]
+            return f"{m.group()}'{yr}" if m else rp[:7]
+        # Annual: use year from fiscal_period if available, else report_period
+        return (fp[:4] if len(fp) >= 4 else rp[:4])
 
     mh_map = {row.get("report_period", ""): row for row in metrics_history}
     cf_map = {row.get("report_period", ""): row for row in cashflow}
@@ -235,15 +238,15 @@ def _build_trends(income: list, cashflow: list, metrics_history: list, is_quarte
     fcf_trend:     list[dict] = []
     margins_trend: list[dict] = []
 
-    # income is newest-first from API; reverse for chronological order
-    for stmt in reversed(income):
+    # Sort ascending by report_period for chronological chart order
+    for stmt in sorted(income, key=lambda x: x.get("report_period", "")):
         rp = stmt.get("report_period", "")
         fp = stmt.get("fiscal_period", "")
         pl = period_label(rp, fp)
         mh = mh_map.get(rp, {})
 
         rev = stmt.get("revenue")
-        if rev is not None:
+        if rev is not None and rev > 0:
             rg = mh.get("revenue_growth")
             revenue_trend.append({
                 "period": pl, "report_period": rp,
@@ -260,7 +263,7 @@ def _build_trends(income: list, cashflow: list, metrics_history: list, is_quarte
                 "growth": round(eg * 100, 1) if eg is not None else None,
             })
 
-        if rev:
+        if rev is not None and rev > 0:
             gross  = stmt.get("gross_profit")
             op_inc = stmt.get("operating_income")
             net    = stmt.get("net_income")
@@ -282,7 +285,7 @@ def _build_trends(income: list, cashflow: list, metrics_history: list, is_quarte
             })
 
     returns_trend: list[dict] = []
-    for mh in reversed(metrics_history):
+    for mh in sorted(metrics_history, key=lambda x: x.get("report_period", "")):
         rp  = mh.get("report_period", "")
         fp  = mh.get("fiscal_period", "")
         roe  = mh.get("return_on_equity")

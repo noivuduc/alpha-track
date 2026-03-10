@@ -16,7 +16,7 @@ interface Props {
   onRangeChange: (r: string) => void;
 }
 
-const RANGES = ["1M", "3M", "6M", "YTD", "1Y", "2Y"];
+const RANGES = ["1M", "3M", "6M", "YTD", "1Y", "3Y"];
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null;

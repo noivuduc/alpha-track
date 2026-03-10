@@ -186,7 +186,63 @@ class PortfolioMetrics(BaseModel):
 
 # ── Portfolio Analytics ────────────────────────────────────────────────────────
 
+class PortfolioValuePoint(BaseModel):
+    date:  str
+    value: float
+
+
+class RollingReturns(BaseModel):
+    return_1w:   float | None = None
+    return_1m:   float | None = None
+    return_3m:   float | None = None
+    return_ytd:  float | None = None
+    return_1y:   float | None = None
+
+
+class ContributionEntry(BaseModel):
+    ticker:           str
+    contribution_pct: float
+    pnl_contribution: float
+
+
+class PositionAnalyticsEntry(BaseModel):
+    ticker:       str
+    return_pct:   float
+    pnl:          float
+    weight:       float
+    volatility:   float | None = None
+    daily_return: float | None = None
+
+
+class PerformanceMetrics(BaseModel):
+    # Core performance
+    cumulative_return:  float | None = None
+    annualized_return:  float | None = None
+    volatility:         float | None = None
+    sharpe_ratio:       float | None = None
+    max_drawdown:       float | None = None
+    beta:               float | None = None
+    alpha:              float | None = None
+    # Correlation
+    correlation_spy:    float | None = None
+    correlation_qqq:    float | None = None
+    # Concentration / exposure
+    largest_position_weight: float | None = None
+    top3_weight:             float | None = None
+    top5_weight:             float | None = None
+    herfindahl_index:        float | None = None
+    # Market capture
+    upside_capture_ratio:    float | None = None
+    downside_capture_ratio:  float | None = None
+    # Turnover
+    estimated_turnover_pct:  float | None = None
+    # Return distribution
+    skewness: float | None = None
+    kurtosis: float | None = None
+
+
 class RiskMetrics(BaseModel):
+    # Core risk
     sharpe:                float | None = None
     sortino:               float | None = None
     beta:                  float | None = None
@@ -199,6 +255,38 @@ class RiskMetrics(BaseModel):
     information_ratio:     float | None = None
     var_95_pct:            float | None = None
     trading_days:          int   | None = None
+    # Downside risk (additive)
+    downside_deviation: float | None = None
+    ulcer_index:        float | None = None
+    tail_loss_95:       float | None = None
+
+
+# ── Advanced analytics point types ────────────────────────────────────────────
+
+class RollingMetricPoint(BaseModel):
+    date:               str
+    rolling_sharpe:     float | None = None
+    rolling_volatility: float | None = None
+    rolling_beta:       float | None = None
+    rolling_sortino:    float | None = None
+
+
+class RollingCorrelationPoint(BaseModel):
+    date:  str
+    value: float | None = None
+
+
+class VolatilityRegimePoint(BaseModel):
+    date:       str
+    volatility: float
+    regime:     str   # "low" | "normal" | "high"
+
+
+class GrowthPoint(BaseModel):
+    date:      str
+    portfolio: float
+    spy:       float | None = None
+    qqq:       float | None = None
 
 
 class PerformancePoint(BaseModel):
@@ -237,6 +325,25 @@ class PortfolioAnalytics(BaseModel):
     performance:     list[PerformancePoint]
     drawdown:        list[DrawdownPoint]
     monthly_returns: list[MonthlyReturn]
+    # Derived analytics (server-side computed)
+    derived_metrics:  dict       | None = None
+    # Position-level analytics (legacy best/worst/ticker_returns for OverviewTab)
+    position_summary: dict       | None = None
+    # Portfolio news (top 10 most recent across all tickers)
+    portfolio_news:   list[dict] | None = None
+    # ── Comprehensive analytics fields ─────────────────────────────────
+    portfolio_value_series: list[PortfolioValuePoint]    | None = None
+    daily_returns:          list[float]                  | None = None
+    rolling_returns:        RollingReturns               | None = None
+    contribution:           list[ContributionEntry]      | None = None
+    position_analytics:     list[PositionAnalyticsEntry] | None = None
+    performance_metrics:    PerformanceMetrics            | None = None
+    # ── Advanced institutional analytics fields ─────────────────────────
+    rolling_metrics:         dict                              | None = None  # {"63d"|"126d"|"252d": list[RollingMetricPoint]}
+    rolling_correlation_spy: list[RollingCorrelationPoint]    | None = None
+    volatility_regime:       list[VolatilityRegimePoint]      | None = None
+    rolling_drawdown_6m:     list[DrawdownPoint]              | None = None
+    growth_of_100:           list[GrowthPoint]                | None = None
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 class AdminStats(BaseModel):

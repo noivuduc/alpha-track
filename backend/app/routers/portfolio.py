@@ -158,19 +158,14 @@ async def get_analytics(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Portfolio has no open positions")
 
-    # ── Current prices → weights ─────────────────────────────
-    tickers = [pos.ticker for pos in positions]
+    # ── Current prices ────────────────────────────────────────
+    tickers = list({pos.ticker for pos in positions})
     prices  = await ds.get_prices_bulk(tickers)
 
     total_value = sum(
         float(pos.shares) * prices.get(pos.ticker, {}).get("price", float(pos.cost_basis))
         for pos in positions
     )
-    weights: dict[str, float] = {}
-    for pos in positions:
-        price = prices.get(pos.ticker, {}).get("price", float(pos.cost_basis))
-        val   = float(pos.shares) * price
-        weights[pos.ticker] = val / total_value if total_value else 1 / len(positions)
 
     # ── Fetch price history in parallel ─────────────────────
     fetch_tickers = list({*tickers, benchmark, "QQQ"})
@@ -190,13 +185,28 @@ async def get_analytics(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             "Could not fetch price history for any position")
 
-    # ── Align + compute ──────────────────────────────────────
+    # ── Build market calendar + price lookup ─────────────────
     ref = benchmark if benchmark in histories else (
           "SPY"     if "SPY"     in histories else tickers[0])
 
-    dates, aligned = A.align_series(histories, ref_ticker=ref)
+    dates, _aligned = A.align_series(histories, ref_ticker=ref)
+    price_lookup    = A.build_price_lookup(histories)
 
-    result_data = A.compute_all(aligned, weights, dates, benchmark=ref)
+    # ── Build lots list (each position lot with opened_at) ────
+    lots = [
+        {
+            "ticker":         pos.ticker,
+            "shares":         float(pos.shares),
+            "cost_basis":     float(pos.cost_basis),
+            "opened_at_date": pos.opened_at.date().isoformat()
+                              if hasattr(pos.opened_at, "date")
+                              else str(pos.opened_at)[:10],
+        }
+        for pos in positions
+    ]
+
+    # ── Run comprehensive analytics engine ───────────────────
+    result_data = A.compute_engine(price_lookup, lots, dates, benchmark=ref)
 
     # ── Value metrics (consistent with /metrics endpoint) ────
     total_cost = sum(float(p.shares) * float(p.cost_basis) for p in positions)
@@ -205,6 +215,23 @@ async def get_analytics(
         float(p.shares) * prices.get(p.ticker, {}).get("change", 0.0)
         for p in positions
     )
+
+    # ── Position summary + news (parallel) ───────────────────
+    position_summary = A.compute_position_summary(positions, prices, histories)
+
+    async def _news(t: str) -> list[dict]:
+        try:
+            return await ds.get_news(t)
+        except Exception as e:
+            log.warning("analytics: news fetch failed for %s: %s", t, e)
+            return []
+
+    news_batches = await asyncio.gather(*[_news(t) for t in tickers])
+    all_news = sorted(
+        [item for batch in news_batches for item in batch],
+        key=lambda n: n.get("date", ""),
+        reverse=True,
+    )[:10]
 
     response = {
         "portfolio_id": str(portfolio_id),
@@ -217,10 +244,12 @@ async def get_analytics(
         "day_gain":       round(day_gain, 2),
         "day_gain_pct":   round(day_gain / total_value * 100 if total_value else 0, 2),
         **result_data,
+        "position_summary": position_summary,
+        "portfolio_news":   all_news,
     }
 
-    # ── Cache for 1 hour ────────────────────────────────────
-    await cache.set(cache_key, _json.dumps(response), 3600)
+    # ── Cache for 60 seconds ────────────────────────────────
+    await cache.set(cache_key, _json.dumps(response), 60)
     return response
 
 

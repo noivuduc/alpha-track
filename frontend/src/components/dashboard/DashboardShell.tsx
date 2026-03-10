@@ -28,10 +28,6 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "fundamentals", label: "Fundamentals", icon: <LineChart size={16} />       },
 ];
 
-const PERIOD_LABELS: Record<Period, string> = {
-  "1mo": "1M", "3mo": "3M", "6mo": "6M", "ytd": "YTD", "1y": "1Y", "2y": "2Y",
-};
-
 const tierBadge: Record<string, string> = {
   free: "bg-zinc-700 text-zinc-300",
   pro:  "bg-blue-900 text-blue-300",
@@ -43,7 +39,7 @@ export default function DashboardShell() {
   const router = useRouter();
 
   const [tab,         setTab]         = useState<Tab>("overview");
-  const [period,      setPeriod]      = useState<Period>("1y");
+  const period: Period = "1y";
   const [portfolios,  setPortfolios]  = useState<Portfolio[]>([]);
   const [selected,    setSelected]    = useState<Portfolio | null>(null);
   const [positions,   setPositions]   = useState<Position[]>([]);
@@ -202,27 +198,8 @@ export default function DashboardShell() {
             )}
           </div>
 
-          {/* Right: period selector + refresh + user + logout */}
+          {/* Right: refresh + user + logout */}
           <div className="flex items-center gap-2">
-            {/* Period toggles — visible only on overview/risk */}
-            {(tab === "overview" || tab === "risk") && (
-              <div className="hidden md:flex gap-0.5 bg-zinc-800 rounded-lg p-0.5">
-                {(Object.entries(PERIOD_LABELS) as [Period, string][]).map(([p, label]) => (
-                  <button
-                    key={p}
-                    onClick={() => setPeriod(p)}
-                    className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
-                      period === p
-                        ? "bg-blue-600 text-white"
-                        : "text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-
             {/* Ticker research search */}
             <div className="hidden sm:block">
               <SearchAutocomplete placeholder="Research ticker…" />

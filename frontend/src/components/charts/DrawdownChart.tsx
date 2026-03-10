@@ -4,6 +4,7 @@ import {
 } from "recharts";
 
 interface DataPoint { date: string; drawdown: number; }
+interface Props { data: DataPoint[]; maxDrawdown?: number; }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null;
@@ -18,7 +19,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   );
 };
 
-export default function DrawdownChart({ data }: { data: DataPoint[] }) {
+export default function DrawdownChart({ data, maxDrawdown }: Props) {
   return (
     <ResponsiveContainer width="100%" height={200}>
       <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
@@ -45,6 +46,15 @@ export default function DrawdownChart({ data }: { data: DataPoint[] }) {
           width={46}
         />
         <ReferenceLine y={0} stroke="#3f3f46" strokeDasharray="3 3" />
+        {maxDrawdown !== undefined && (
+          <ReferenceLine
+            y={maxDrawdown}
+            stroke="#f97316"
+            strokeDasharray="4 4"
+            strokeWidth={1.5}
+            label={{ value: `Max DD ${maxDrawdown.toFixed(1)}%`, position: "insideTopLeft", fill: "#f97316", fontSize: 10 }}
+          />
+        )}
         <Tooltip content={<CustomTooltip />} />
         <Area
           type="monotone"

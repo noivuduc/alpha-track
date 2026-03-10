@@ -391,6 +391,54 @@ class DataService:
         return data
 
     # ════════════════════════════════════════════════════════════════
+    # NEWS  (yfinance free, 15-minute cache per ticker)
+    # ════════════════════════════════════════════════════════════════
+    async def get_news(self, ticker: str) -> list[dict]:
+        """Fetch recent news for a ticker via yfinance. Cached 15 minutes."""
+        key = f"news:{ticker.upper()}"
+        cached = await self.cache.get(key)
+        if cached:
+            return json.loads(cached)
+
+        loop = asyncio.get_event_loop()
+        def _sync():
+            t        = yf.Ticker(ticker)
+            raw_news = t.news or []
+            result   = []
+            for item in raw_news[:15]:
+                content = item.get("content") or {}
+                if content:
+                    # yfinance ≥1.2 nested format
+                    title    = content.get("title", "")
+                    provider = (content.get("provider") or {}).get("displayName", "")
+                    url_obj  = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
+                    url      = url_obj.get("url", "")
+                    pub_date = (content.get("pubDate") or "")[:10]
+                else:
+                    # Legacy flat format
+                    title    = item.get("title", "")
+                    provider = item.get("publisher", "")
+                    url      = item.get("link", "")
+                    ts       = item.get("providerPublishTime", 0)
+                    pub_date = (
+                        datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                        if ts else ""
+                    )
+                if title:
+                    result.append({
+                        "ticker":   ticker.upper(),
+                        "headline": title,
+                        "source":   provider,
+                        "url":      url,
+                        "date":     pub_date,
+                    })
+            return result
+
+        news = await loop.run_in_executor(None, _sync)
+        await self.cache.set(key, json.dumps(news), 900)   # 15 min
+        return news
+
+    # ════════════════════════════════════════════════════════════════
     # CACHE MANAGEMENT
     # ════════════════════════════════════════════════════════════════
     async def invalidate(self, ticker: str):

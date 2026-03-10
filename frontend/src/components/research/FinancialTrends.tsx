@@ -28,9 +28,29 @@ interface Props {
   period?:   "annual" | "quarterly";
 }
 
+function sortByPeriod<T extends { report_period?: string }>(arr: T[]): T[] {
+  return [...arr].sort((a, b) => (a.report_period ?? "").localeCompare(b.report_period ?? ""));
+}
+
+/** Recompute true YoY growth from value array; lookback=4 for quarterly, 1 for annual */
+function withYoY<T extends { value: number; growth: number | null }>(arr: T[], lookback: number): T[] {
+  return arr.map((pt, i) => {
+    if (i < lookback) return { ...pt, growth: null };
+    const prev = arr[i - lookback].value;
+    const growth = prev !== 0 ? +((( pt.value - prev) / Math.abs(prev)) * 100).toFixed(1) : null;
+    return { ...pt, growth };
+  });
+}
+
 export default function FinancialTrends({ annual, quarterly, period = "annual" }: Props) {
-  const trends = period === "quarterly" ? quarterly : annual;
-  const { revenue, eps, free_cash_flow, margins, returns } = trends;
+  const isQ   = period === "quarterly";
+  const lb    = isQ ? 4 : 1;
+  const trends = isQ ? quarterly : annual;
+  const revenue        = withYoY(sortByPeriod(trends.revenue),        lb);
+  const eps            = withYoY(sortByPeriod(trends.eps),            lb);
+  const free_cash_flow = withYoY(sortByPeriod(trends.free_cash_flow), lb);
+  const margins        = sortByPeriod(trends.margins);
+  const returns        = sortByPeriod(trends.returns);
 
   const hasReturns = returns.some(r => r.roe != null || r.roa != null || r.roic != null);
   const chartClass = "bg-zinc-800/40 rounded-xl p-4";
