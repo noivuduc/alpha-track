@@ -1,0 +1,359 @@
+"""
+Portfolio Analytics Engine — orchestration layer.
+
+compute_engine() is the single entry point.  It calls the specialised
+sub-modules in sequence and assembles the final analytics dict that maps
+1-to-1 onto the PortfolioAnalytics Pydantic schema.
+
+Zero I/O: accepts plain Python dicts/lists and returns plain Python dicts.
+"""
+from __future__ import annotations
+
+from .portfolio_reconstruction import reconstruct_portfolio_value
+from .return_series import daily_returns, cumulative_series
+from .math_utils import pct_change
+from .risk_metrics import (
+    beta, alpha, sharpe, sortino, max_drawdown, calmar,
+    win_rate, information_ratio, value_at_risk, pearson_corr,
+    compute_downside_risk,
+)
+from .rolling_metrics import (
+    compute_rolling_returns,
+    compute_rolling_risk_metrics,
+    compute_rolling_correlation,
+    compute_volatility_regime,
+    compute_rolling_max_drawdown,
+)
+from .contribution import compute_contribution
+from .positions   import compute_position_analytics, compute_position_summary  # noqa: F401 (re-exported)
+from .performance import (
+    performance_series, monthly_returns, drawdown_series,
+    compute_growth_of_100, compute_return_distribution,
+    compute_derived_metrics,
+)
+from .exposure import (
+    compute_exposure_metrics,
+    compute_capture_ratios,
+    compute_turnover_pct,
+)
+
+# ── Empty-result sentinels ─────────────────────────────────────────────────────
+
+_EMPTY_RISK: dict = {
+    "sharpe": 0.0, "sortino": 0.0, "beta": 1.0, "alpha_pct": 0.0,
+    "max_drawdown_pct": 0.0, "volatility_pct": 0.0, "calmar": 0.0,
+    "win_rate_pct": 0.0, "annualized_return_pct": 0.0,
+    "information_ratio": 0.0, "var_95_pct": 0.0, "trading_days": 0,
+}
+_EMPTY_ROLLING: dict = {
+    "return_1w": None, "return_1m": None,
+    "return_3m": None, "return_ytd": None, "return_1y": None,
+}
+_EMPTY_RESULT: dict = {
+    "risk_metrics":           _EMPTY_RISK,
+    "performance":            [],
+    "drawdown":               [],
+    "monthly_returns":        [],
+    "derived_metrics":        None,
+    "portfolio_value_series": [],
+    "daily_returns":          [],
+    "rolling_returns":        _EMPTY_ROLLING,
+    "contribution":           [],
+    "position_analytics":     [],
+    "performance_metrics":    None,
+    # Advanced fields
+    "rolling_metrics":         {"63d": [], "126d": [], "252d": []},
+    "rolling_correlation_spy": [],
+    "volatility_regime":       [],
+    "rolling_drawdown_6m":     [],
+    "growth_of_100":           [],
+}
+
+
+# ── Main entry point ───────────────────────────────────────────────────────────
+
+def compute_engine(
+    price_lookup: dict[str, dict[str, float]],
+    lots:         list[dict],
+    dates:        list[str],
+    benchmark:    str = "SPY",
+) -> dict:
+    """
+    Comprehensive portfolio analytics engine.
+
+    Reconstructs the TRUE daily portfolio value from position lots (honouring
+    opened_at), then computes institutional-grade performance metrics, rolling
+    returns, per-position contribution, and position-level analytics.
+
+    Args:
+        price_lookup: {ticker: {YYYY-MM-DD: close}}  — output of build_price_lookup()
+        lots: [{"ticker": str, "shares": float, "cost_basis": float,
+                "opened_at_date": str (YYYY-MM-DD)}]
+        dates: full market calendar from align_series()
+        benchmark: primary benchmark ticker (SPY by default)
+
+    Returns a dict compatible with PortfolioAnalytics schema.
+    """
+    # ── Step 1: Reconstruct actual portfolio value series ──────────────────────
+    active_dates, portfolio_values = reconstruct_portfolio_value(
+        price_lookup, lots, dates
+    )
+    if not portfolio_values:
+        return dict(_EMPTY_RESULT)
+
+    # ── Step 2: Daily returns ──────────────────────────────────────────────────
+    port_returns = daily_returns(portfolio_values)
+
+    # ── Step 3: Benchmark price series aligned to active_dates (forward-fill) ─
+    def _bench_ff(ticker: str) -> list[float]:
+        d2c    = price_lookup.get(ticker, {})
+        last_p: float | None = None
+        out: list[float] = []
+        for d in active_dates:
+            p = d2c.get(d)
+            if p and p > 0:
+                last_p = p
+            if last_p:
+                out.append(last_p)
+        return out
+
+    bm_closes  = _bench_ff(benchmark)
+    spy_closes = _bench_ff("SPY") if benchmark.upper() != "SPY" else bm_closes
+    qqq_closes = _bench_ff("QQQ") if benchmark.upper() != "QQQ" else bm_closes
+
+    bm_returns  = daily_returns(bm_closes)  if len(bm_closes)  >= 2 else []
+    spy_returns = daily_returns(spy_closes) if len(spy_closes) >= 2 else []
+    qqq_returns = daily_returns(qqq_closes) if len(qqq_closes) >= 2 else []
+
+    # ── Step 4: Risk metrics ───────────────────────────────────────────────────
+    b   = beta(port_returns, bm_returns)             if bm_returns else 1.0
+    a   = alpha(port_returns, bm_returns, b)         if bm_returns else 0.0
+    ir  = information_ratio(port_returns, bm_returns) if bm_returns else 0.0
+    var = value_at_risk(port_returns)
+
+    from .return_series import annualized_return, annualized_vol
+    risk_metrics: dict = {
+        "sharpe":                sharpe(port_returns),
+        "sortino":               sortino(port_returns),
+        "beta":                  b,
+        "alpha_pct":             a,
+        "max_drawdown_pct":      max_drawdown(portfolio_values),
+        "volatility_pct":        annualized_vol(port_returns),
+        "calmar":                calmar(port_returns, portfolio_values),
+        "win_rate_pct":          win_rate(port_returns),
+        "annualized_return_pct": annualized_return(port_returns),
+        "information_ratio":     ir,
+        "var_95_pct":            var,
+        "trading_days":          len(port_returns),
+    }
+    risk_metrics.update(compute_downside_risk(port_returns, portfolio_values))
+
+    # ── Step 5: Summary performance metrics ───────────────────────────────────
+    v0, vn = portfolio_values[0], portfolio_values[-1]
+    perf_metrics: dict = {
+        "cumulative_return": round((pct_change(vn, v0) or 0.0), 4),
+        "annualized_return": risk_metrics["annualized_return_pct"],
+        "volatility":        risk_metrics["volatility_pct"],
+        "sharpe_ratio":      risk_metrics["sharpe"],
+        "max_drawdown":      risk_metrics["max_drawdown_pct"],
+        "beta":              b,
+        "alpha":             a,
+        # Populated after correlation is computed (step 6)
+        "correlation_spy":   None,
+        "correlation_qqq":   None,
+    }
+
+    # ── Step 6: Correlation (portfolio vs SPY/QQQ) ────────────────────────────
+    corr_spy = pearson_corr(port_returns, spy_returns) if spy_returns else None
+    corr_qqq = pearson_corr(port_returns, qqq_returns) if qqq_returns else None
+
+    # ── Step 7: Cumulative series for benchmark comparison chart ──────────────
+    port_cumul = cumulative_series(port_returns)
+    bm_cumul   = cumulative_series(bm_returns)  if bm_returns  else []
+    spy_cumul  = cumulative_series(spy_returns) if spy_returns else (bm_cumul if benchmark.upper() == "SPY" else [])
+    qqq_cumul  = cumulative_series(qqq_returns) if qqq_returns else (bm_cumul if benchmark.upper() == "QQQ" else [])
+
+    bench_cumul: dict[str, list[float]] = {}
+    if spy_cumul: bench_cumul["SPY"] = spy_cumul
+    if qqq_cumul: bench_cumul["QQQ"] = qqq_cumul
+
+    # ── Step 8: Time-series chart outputs ─────────────────────────────────────
+    dd_data    = drawdown_series(active_dates, portfolio_values)
+    perf_chart = performance_series(active_dates, port_cumul, bench_cumul)
+    mo_ret     = monthly_returns(active_dates, portfolio_values)
+
+    # ── Step 9: Derived metrics ────────────────────────────────────────────────
+    derived = compute_derived_metrics(
+        dates         = active_dates,
+        port_values   = port_cumul,
+        port_returns  = port_returns,
+        spy_values    = spy_cumul,
+        qqq_values    = qqq_cumul,
+        drawdown_data = dd_data,
+    )
+
+    # ── Step 10: Rolling returns ───────────────────────────────────────────────
+    rolling = compute_rolling_returns(portfolio_values, active_dates)
+
+    # ── Step 11: Contribution analytics ───────────────────────────────────────
+    contribution = compute_contribution(lots, price_lookup, active_dates, portfolio_values)
+
+    # ── Step 12: Position-level analytics ─────────────────────────────────────
+    pos_analytics = compute_position_analytics(lots, price_lookup, active_dates, portfolio_values)
+
+    # ── Step 13: Rolling risk metrics (63 / 126 / 252-day windows) ────────────
+    rolling_risk = compute_rolling_risk_metrics(port_returns, spy_returns, active_dates)
+
+    # ── Step 14: Rolling correlation vs SPY (90-day) ──────────────────────────
+    rolling_corr_spy = (
+        compute_rolling_correlation(port_returns, spy_returns, active_dates)
+        if spy_returns else []
+    )
+
+    # ── Step 15: Volatility regime classification (30-day window) ─────────────
+    vol_regime = compute_volatility_regime(port_returns, active_dates)
+
+    # ── Step 16: Exposure / concentration metrics ──────────────────────────────
+    exposure = compute_exposure_metrics(lots, price_lookup, active_dates, portfolio_values)
+
+    # ── Step 17: Rolling 6-month max drawdown ─────────────────────────────────
+    rolling_mdd_6m = compute_rolling_max_drawdown(portfolio_values, active_dates, window=126)
+
+    # ── Step 18: Market capture ratios ────────────────────────────────────────
+    captures = compute_capture_ratios(port_returns, bm_returns) if bm_returns else {}
+
+    # ── Step 19: Turnover estimate ────────────────────────────────────────────
+    turnover = compute_turnover_pct(lots, price_lookup, active_dates)
+
+    # ── Step 20: Growth-of-$100 chart ─────────────────────────────────────────
+    growth100 = compute_growth_of_100(active_dates, portfolio_values, spy_closes, qqq_closes)
+
+    # ── Step 21: Return distribution (skewness / kurtosis) ────────────────────
+    ret_dist = compute_return_distribution(port_returns)
+
+    # ── Populate all performance_metrics additions ─────────────────────────────
+    perf_metrics["correlation_spy"] = corr_spy
+    perf_metrics["correlation_qqq"] = corr_qqq
+    perf_metrics.update(exposure)
+    perf_metrics.update(captures)
+    perf_metrics["estimated_turnover_pct"] = turnover
+    perf_metrics.update(ret_dist)
+
+    return {
+        # ─── Existing fields (backward-compatible) ──────────────────────────
+        "risk_metrics":    risk_metrics,
+        "performance":     perf_chart,
+        "drawdown":        dd_data,
+        "monthly_returns": mo_ret,
+        "derived_metrics": derived,
+        # ─── Comprehensive analytics fields ─────────────────────────────────
+        "portfolio_value_series": [
+            {"date": d, "value": v}
+            for d, v in zip(active_dates, portfolio_values)
+        ],
+        "daily_returns":      port_returns,
+        "rolling_returns":    rolling,
+        "contribution":       contribution,
+        "position_analytics": pos_analytics,
+        "performance_metrics": perf_metrics,
+        # ─── Advanced institutional analytics fields ─────────────────────────
+        "rolling_metrics":         rolling_risk,
+        "rolling_correlation_spy": rolling_corr_spy,
+        "volatility_regime":       vol_regime,
+        "rolling_drawdown_6m":     rolling_mdd_6m,
+        "growth_of_100":           growth100,
+    }
+
+
+# ── Legacy wrappers (kept for any code still calling the old API) ──────────────
+
+def build_portfolio_returns(
+    aligned: dict[str, list[float]],
+    weights: dict[str, float],
+    n_days: int,
+) -> list[float]:
+    """
+    Legacy weight-based portfolio return approximation.
+    Prefer compute_engine() for accurate lot-aware reconstruction.
+    """
+    total_w = sum(weights.values())
+    if total_w == 0:
+        return [0.0] * max(n_days - 1, 0)
+
+    port = [0.0] * max(n_days - 1, 0)
+    for ticker, wt in weights.items():
+        closes = aligned.get(ticker, [])
+        frac   = wt / total_w
+        for i in range(min(len(closes) - 1, n_days - 1)):
+            prev = closes[i]
+            if prev and prev != 0:
+                port[i] += frac * (closes[i + 1] - prev) / prev
+    return port
+
+
+def compute_all(
+    aligned:   dict[str, list[float]],
+    weights:   dict[str, float],
+    dates:     list[str],
+    benchmark: str = "SPY",
+) -> dict:
+    """
+    Legacy wrapper.  Uses fixed-weight approximation.
+    New code should call compute_engine() instead.
+    """
+    from .return_series import annualized_return, annualized_vol
+
+    n = len(dates)
+
+    port_returns = build_portfolio_returns(aligned, weights, n)
+    port_values  = cumulative_series(port_returns)
+    port_dates   = dates[:len(port_values)]
+
+    bm_returns  = daily_returns(aligned.get(benchmark, []))
+    bm_values   = cumulative_series(bm_returns) if bm_returns else []
+    qqq_returns = daily_returns(aligned.get("QQQ", []))
+    qqq_values  = cumulative_series(qqq_returns) if qqq_returns else []
+
+    b   = beta(port_returns, bm_returns)         if bm_returns else 1.0
+    a   = alpha(port_returns, bm_returns, b)     if bm_returns else 0.0
+    ir  = information_ratio(port_returns, bm_returns) if bm_returns else 0.0
+    var = value_at_risk(port_returns)
+
+    risk = {
+        "sharpe":                sharpe(port_returns),
+        "sortino":               sortino(port_returns),
+        "beta":                  b,
+        "alpha_pct":             a,
+        "max_drawdown_pct":      max_drawdown(port_values),
+        "volatility_pct":        annualized_vol(port_returns),
+        "calmar":                calmar(port_returns, port_values),
+        "win_rate_pct":          win_rate(port_returns),
+        "annualized_return_pct": annualized_return(port_returns),
+        "information_ratio":     ir,
+        "var_95_pct":            var,
+        "trading_days":          len(port_returns),
+    }
+
+    bench_vals: dict[str, list[float]] = {}
+    if bm_values:  bench_vals[benchmark] = bm_values
+    if qqq_values: bench_vals["QQQ"]     = qqq_values
+
+    dd_data = drawdown_series(port_dates, port_values)
+
+    spy_closes = aligned.get("SPY", [])
+    spy_vals   = cumulative_series(daily_returns(spy_closes)) if len(spy_closes) >= 2 else []
+
+    return {
+        "risk_metrics":    risk,
+        "performance":     performance_series(port_dates, port_values, bench_vals),
+        "drawdown":        dd_data,
+        "monthly_returns": monthly_returns(port_dates, port_values),
+        "derived_metrics": compute_derived_metrics(
+            dates         = port_dates,
+            port_values   = port_values,
+            port_returns  = port_returns,
+            spy_values    = spy_vals,
+            qqq_values    = qqq_values,
+            drawdown_data = dd_data,
+        ),
+    }
