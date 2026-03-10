@@ -10,7 +10,10 @@ Zero I/O: accepts plain Python dicts/lists and returns plain Python dicts.
 from __future__ import annotations
 
 from .portfolio_reconstruction import reconstruct_portfolio_value
-from .return_series import daily_returns, cumulative_series
+from .return_series import (
+    daily_returns, cumulative_series,
+    build_cash_flows, compute_twr_returns,
+)
 from .math_utils import pct_change
 from .risk_metrics import (
     beta, alpha, sharpe, sortino, max_drawdown, calmar,
@@ -30,7 +33,8 @@ from .performance import (
     performance_series, monthly_returns, drawdown_series,
     compute_growth_of_100, compute_return_distribution,
     compute_derived_metrics, compute_daily_return_heatmap,
-    compute_weekly_returns, compute_period_extremes,
+    compute_period_extremes,
+    monthly_returns_twr, weekly_returns_twr,
 )
 from .exposure import (
     compute_exposure_metrics,
@@ -105,8 +109,16 @@ def compute_engine(
     if not portfolio_values:
         return dict(_EMPTY_RESULT)
 
-    # ── Step 2: Daily returns ──────────────────────────────────────────────────
-    port_returns = daily_returns(portfolio_values)
+    # ── Step 2: Build cash flows and compute TWR daily returns ────────────────
+    # External cash flows (new lot purchases) are stripped before computing each
+    # day's return so that capital injections do not inflate performance metrics.
+    #
+    #   R_t = (V_t - CF_t) / V_{t-1} - 1
+    #
+    # cash_flows maps each active trading date to the total capital injected on
+    # that day (sum of shares × cost_basis for all lots opened on that date).
+    cash_flows   = build_cash_flows(lots, active_dates)
+    port_returns = compute_twr_returns(portfolio_values, active_dates, cash_flows)
 
     # ── Step 3: Benchmark price series aligned to active_dates (forward-fill) ─
     def _bench_ff(ticker: str) -> list[float]:
@@ -182,9 +194,13 @@ def compute_engine(
     if qqq_cumul: bench_cumul["QQQ"] = qqq_cumul
 
     # ── Step 8: Time-series chart outputs ─────────────────────────────────────
-    dd_data    = drawdown_series(active_dates, portfolio_values)
+    # Drawdown is computed on the TWR cumulative index (port_cumul) rather than
+    # raw NAV so that capital injections don't create artificial new peaks.
+    # port_cumul starts at 100 and grows purely by market performance.
+    dd_data    = drawdown_series(active_dates, port_cumul)
     perf_chart = performance_series(active_dates, port_cumul, bench_cumul)
-    mo_ret     = monthly_returns(active_dates, portfolio_values)
+    # Monthly returns compound daily TWR returns — cash-flow-neutral aggregation.
+    mo_ret     = monthly_returns_twr(active_dates[1:], port_returns)
 
     # ── Step 9: Derived metrics ────────────────────────────────────────────────
     derived = compute_derived_metrics(
@@ -197,7 +213,9 @@ def compute_engine(
     )
 
     # ── Step 10: Rolling returns ───────────────────────────────────────────────
-    rolling = compute_rolling_returns(portfolio_values, active_dates)
+    # Use the TWR cumulative index for look-back return windows so that
+    # historical cash flows don't distort the 1W/1M/3M/YTD/1Y figures.
+    rolling = compute_rolling_returns(port_cumul, active_dates)
 
     # ── Step 11: Contribution analytics ───────────────────────────────────────
     contribution = compute_contribution(lots, price_lookup, active_dates, portfolio_values)
@@ -221,7 +239,9 @@ def compute_engine(
     exposure = compute_exposure_metrics(lots, price_lookup, active_dates, portfolio_values)
 
     # ── Step 17: Rolling 6-month max drawdown ─────────────────────────────────
-    rolling_mdd_6m = compute_rolling_max_drawdown(portfolio_values, active_dates, window=126)
+    # TWR index ensures drawdown reflects pure performance loss, not dilution
+    # from adding cash to the portfolio.
+    rolling_mdd_6m = compute_rolling_max_drawdown(port_cumul, active_dates, window=126)
 
     # ── Step 18: Market capture ratios ────────────────────────────────────────
     captures = compute_capture_ratios(port_returns, bm_returns) if bm_returns else {}
@@ -239,7 +259,8 @@ def compute_engine(
     daily_heatmap = compute_daily_return_heatmap(active_dates[1:], port_returns)
 
     # ── Step 23: Weekly returns ────────────────────────────────────────────────
-    weekly_returns = compute_weekly_returns(active_dates, portfolio_values)
+    # Compound daily TWR returns within each ISO week — same logic as monthly.
+    weekly_returns = weekly_returns_twr(active_dates[1:], port_returns)
 
     # ── Step 24: Period extremes (best/worst day / week / month) ──────────────
     period_extremes = compute_period_extremes(daily_heatmap, weekly_returns, mo_ret)

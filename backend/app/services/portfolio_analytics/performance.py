@@ -41,6 +41,10 @@ def monthly_returns(dates: list[str], values: list[float]) -> list[dict]:
     Aggregate a daily value series into monthly returns.
 
     Returns list of {"year", "month", "label", "value" (%)}.
+
+    NOTE: Use monthly_returns_twr() when a TWR daily return series is
+    available — this function uses first/last NAV values and is biased by
+    capital injections that occur mid-month.
     """
     if len(dates) < 2 or len(dates) != len(values):
         return []
@@ -57,6 +61,55 @@ def monthly_returns(dates: list[str], values: list[float]) -> list[dict]:
         start, end = buckets[key]
         y, m = int(key[:4]), int(key[5:7])
         ret  = (end - start) / start * 100 if start else 0.0
+        result.append({
+            "year":  y,
+            "month": m,
+            "label": MONTHS[m - 1],
+            "value": round(ret, 4),
+        })
+    return result
+
+
+def monthly_returns_twr(
+    dates:   list[str],
+    returns: list[float],
+) -> list[dict]:
+    """
+    Aggregate daily TWR returns into calendar-month returns by compounding.
+
+    For each month M the return is:
+
+        R_M = product of (1 + R_t) for every trading day t in M, minus 1
+
+    This is the correct TWR aggregation: because daily returns already have
+    capital flows stripped out, compounding them gives a cash-flow-neutral
+    monthly return — even when new lots were added mid-month.
+
+    Args:
+        dates:   active_dates[1:] — N-1 trading dates aligned with returns
+        returns: daily TWR decimal returns from compute_twr_returns()
+
+    Returns:
+        List of {"year", "month", "label", "value" (%)} sorted chronologically.
+    """
+    if not dates or len(dates) != len(returns):
+        return []
+
+    # Compound gross return factor (1 + R) within each YYYY-MM bucket
+    factors: dict[str, float] = {}
+    order:   list[str]        = []
+
+    for d, r in zip(dates, returns):
+        key = d[:7]                         # "YYYY-MM"
+        if key not in factors:
+            order.append(key)
+            factors[key] = 1.0
+        factors[key] *= (1.0 + r)
+
+    result = []
+    for key in order:
+        y, m = int(key[:4]), int(key[5:7])
+        ret  = (factors[key] - 1.0) * 100.0
         result.append({
             "year":  y,
             "month": m,
@@ -197,6 +250,10 @@ def compute_weekly_returns(dates: list[str], values: list[float]) -> list[dict]:
 
     First value of each ISO week = open; last value = close.
     Returns list of {week, year, week_number, return_pct}.
+
+    NOTE: Use weekly_returns_twr() when a TWR daily return series is
+    available — this function uses first/last NAV values and is biased by
+    capital injections that occur mid-week.
     """
     if len(dates) < 2 or len(dates) != len(values):
         return []
@@ -220,6 +277,59 @@ def compute_weekly_returns(dates: list[str], values: list[float]) -> list[dict]:
     for key in order:
         first_v, last_v, yr, wk = buckets[key]
         ret = (last_v / first_v - 1) * 100 if first_v else 0.0
+        result.append({
+            "week":        key,
+            "year":        yr,
+            "week_number": wk,
+            "return_pct":  round(ret, 4),
+        })
+    return result
+
+
+def weekly_returns_twr(
+    dates:   list[str],
+    returns: list[float],
+) -> list[dict]:
+    """
+    Aggregate daily TWR returns into ISO weekly returns by compounding.
+
+    For each ISO week W the return is:
+
+        R_W = product of (1 + R_t) for every trading day t in W, minus 1
+
+    Compounding the already-stripped daily TWR returns ensures that capital
+    injections mid-week do not inflate the week's reported return.
+
+    Args:
+        dates:   active_dates[1:] — N-1 trading dates aligned with returns
+        returns: daily TWR decimal returns from compute_twr_returns()
+
+    Returns:
+        List of {"week", "year", "week_number", "return_pct"} in chronological
+        order (ISO week label format: "YYYY-Www").
+    """
+    if not dates or len(dates) != len(returns):
+        return []
+
+    # Compound gross return factor within each ISO week bucket
+    factors: dict[str, float]       = {}
+    meta:    dict[str, tuple[int, int]] = {}   # key → (iso_year, iso_week)
+    order:   list[str]              = []
+
+    for d_str, r in zip(dates, returns):
+        y, m, day = int(d_str[:4]), int(d_str[5:7]), int(d_str[8:10])
+        iso_year, iso_week, _ = _date(y, m, day).isocalendar()
+        key = f"{iso_year}-W{iso_week:02d}"
+        if key not in factors:
+            order.append(key)
+            factors[key] = 1.0
+            meta[key]    = (iso_year, iso_week)
+        factors[key] *= (1.0 + r)
+
+    result = []
+    for key in order:
+        yr, wk = meta[key]
+        ret = (factors[key] - 1.0) * 100.0
         result.append({
             "week":        key,
             "year":        yr,
