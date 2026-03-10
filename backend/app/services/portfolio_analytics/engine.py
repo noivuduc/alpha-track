@@ -119,6 +119,9 @@ def compute_engine(
     # that day (sum of shares × cost_basis for all lots opened on that date).
     cash_flows   = build_cash_flows(lots, active_dates)
     port_returns = compute_twr_returns(portfolio_values, active_dates, cash_flows)
+    
+    # Generate the cash-flow-neutral cumulative wealth index immediately
+    port_cumul   = cumulative_series(port_returns)
 
     # ── Step 3: Benchmark price series aligned to active_dates (forward-fill) ─
     def _bench_ff(ticker: str) -> list[float]:
@@ -153,19 +156,19 @@ def compute_engine(
         "sortino":               sortino(port_returns),
         "beta":                  b,
         "alpha_pct":             a,
-        "max_drawdown_pct":      max_drawdown(portfolio_values),
+        "max_drawdown_pct":      max_drawdown(port_cumul),
         "volatility_pct":        annualized_vol(port_returns),
-        "calmar":                calmar(port_returns, portfolio_values),
+        "calmar":                calmar(port_returns, port_cumul),
         "win_rate_pct":          win_rate(port_returns),
         "annualized_return_pct": annualized_return(port_returns),
         "information_ratio":     ir,
         "var_95_pct":            var,
         "trading_days":          len(port_returns),
     }
-    risk_metrics.update(compute_downside_risk(port_returns, portfolio_values))
+    risk_metrics.update(compute_downside_risk(port_returns, port_cumul))
 
     # ── Step 5: Summary performance metrics ───────────────────────────────────
-    v0, vn = portfolio_values[0], portfolio_values[-1]
+    v0, vn = port_cumul[0], port_cumul[-1]
     perf_metrics: dict = {
         "cumulative_return": round((pct_change(vn, v0) or 0.0), 4),
         "annualized_return": risk_metrics["annualized_return_pct"],
@@ -184,7 +187,6 @@ def compute_engine(
     corr_qqq = pearson_corr(port_returns, qqq_returns) if qqq_returns else None
 
     # ── Step 7: Cumulative series for benchmark comparison chart ──────────────
-    port_cumul = cumulative_series(port_returns)
     bm_cumul   = cumulative_series(bm_returns)  if bm_returns  else []
     spy_cumul  = cumulative_series(spy_returns) if spy_returns else (bm_cumul if benchmark.upper() == "SPY" else [])
     qqq_cumul  = cumulative_series(qqq_returns) if qqq_returns else (bm_cumul if benchmark.upper() == "QQQ" else [])
@@ -250,7 +252,7 @@ def compute_engine(
     turnover = compute_turnover_pct(lots, price_lookup, active_dates)
 
     # ── Step 20: Growth-of-$100 chart ─────────────────────────────────────────
-    growth100 = compute_growth_of_100(active_dates, portfolio_values, spy_closes, qqq_closes)
+    growth100 = compute_growth_of_100(active_dates, port_cumul, spy_closes, qqq_closes)
 
     # ── Step 21: Return distribution (skewness / kurtosis) ────────────────────
     ret_dist = compute_return_distribution(port_returns)

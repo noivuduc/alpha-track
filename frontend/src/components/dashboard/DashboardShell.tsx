@@ -3,7 +3,7 @@ import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  LayoutDashboard, BarChart2, ShieldAlert, LineChart,
+  LayoutDashboard, BarChart2, ShieldAlert,
   Plus, ChevronDown, LogOut, RefreshCw,
 } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
@@ -13,19 +13,17 @@ import {
 } from "@/lib/api";
 import SearchAutocomplete from "@/components/research/SearchAutocomplete";
 
-const OverviewTab     = dynamic(() => import("./OverviewTab"),     { ssr: false });
-const HoldingsTab     = dynamic(() => import("./HoldingsTab"),     { ssr: false });
-const RiskTab         = dynamic(() => import("./RiskTab"),         { ssr: false });
-const FundamentalsTab = dynamic(() => import("./FundamentalsTab"), { ssr: false });
+const OverviewTab = dynamic(() => import("./OverviewTab"), { ssr: false });
+const HoldingsTab = dynamic(() => import("./HoldingsTab"), { ssr: false });
+const RiskTab     = dynamic(() => import("./RiskTab"),     { ssr: false });
 
-type Tab    = "overview" | "holdings" | "risk" | "fundamentals";
+type Tab    = "overview" | "holdings" | "risk";
 type Period = "1mo" | "3mo" | "6mo" | "ytd" | "1y" | "2y";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview",     label: "Overview",     icon: <LayoutDashboard size={16} /> },
-  { id: "holdings",     label: "Holdings",     icon: <BarChart2 size={16} />       },
-  { id: "risk",         label: "Risk",         icon: <ShieldAlert size={16} />     },
-  { id: "fundamentals", label: "Fundamentals", icon: <LineChart size={16} />       },
+  { id: "overview", label: "Overview", icon: <LayoutDashboard size={16} /> },
+  { id: "holdings", label: "Holdings", icon: <BarChart2 size={16} />       },
+  { id: "risk",     label: "Risk",     icon: <ShieldAlert size={16} />     },
 ];
 
 const tierBadge: Record<string, string> = {
@@ -278,15 +276,12 @@ export default function DashboardShell() {
                 }}
               />
             )}
-            {tab === "risk"         && (
+            {tab === "risk" && (
               <RiskTab
                 analytics={analytics}
                 loading={analyticsLoading}
                 period={period}
               />
-            )}
-            {tab === "fundamentals" && (
-              <FundamentalsTab positions={positions} />
             )}
           </>
         )}
