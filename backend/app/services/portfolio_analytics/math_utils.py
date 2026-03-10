@@ -1,20 +1,26 @@
 """
 Reusable math primitives shared across the analytics modules.
 All functions are pure with no side-effects.
+
+Uses NumPy for numerical stability and performance.
 """
 from __future__ import annotations
 
-import statistics as _stats
+import numpy as np
 
 
 def mean(arr: list[float]) -> float:
     """Arithmetic mean, returns 0.0 for empty input."""
-    return sum(arr) / len(arr) if arr else 0.0
+    if not arr:
+        return 0.0
+    return float(np.mean(np.asarray(arr, dtype=np.float64)))
 
 
 def std(arr: list[float]) -> float:
-    """Sample standard deviation, returns 0.0 when fewer than 2 elements."""
-    return _stats.stdev(arr) if len(arr) >= 2 else 0.0
+    """Sample standard deviation (ddof=1), returns 0.0 when fewer than 2 elements."""
+    if len(arr) < 2:
+        return 0.0
+    return float(np.std(np.asarray(arr, dtype=np.float64), ddof=1))
 
 
 def pct_change(a: float | None, b: float | None) -> float | None:

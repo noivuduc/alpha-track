@@ -1,14 +1,16 @@
 """
 Portfolio risk and quality metrics.
 All functions are pure, accepting and returning plain Python types.
+
+NumPy is used throughout for numerical stability and vectorised computation.
 """
 from __future__ import annotations
 
 import math
-import statistics as _stats
+
+import numpy as np
 
 from .constants import RF_DAILY, TRADING_YR
-from .math_utils import mean, std
 from .return_series import annualized_return, annualized_vol
 
 
@@ -16,34 +18,34 @@ def sharpe(returns: list[float]) -> float:
     """Annualized Sharpe ratio (RF = 2 % annual)."""
     if len(returns) < 20:
         return 0.0
-    m = mean(returns) - RF_DAILY
-    s = std(returns)
-    return round((m / s) * math.sqrt(TRADING_YR), 4) if s else 0.0
+    r  = np.asarray(returns, dtype=np.float64)
+    s  = float(r.std(ddof=1))
+    if s == 0.0:
+        return 0.0
+    return round(float((r.mean() - RF_DAILY) / s) * math.sqrt(TRADING_YR), 4)
 
 
 def sortino(returns: list[float]) -> float:
     """Annualized Sortino ratio (penalises downside only)."""
     if len(returns) < 20:
         return 0.0
-    m    = mean(returns) - RF_DAILY
-    dd_sq = sum(min(r - RF_DAILY, 0) ** 2 for r in returns) / len(returns)
-    dd   = math.sqrt(dd_sq)
-    return round((m / dd) * math.sqrt(TRADING_YR), 4) if dd else 0.0
+    r        = np.asarray(returns, dtype=np.float64)
+    excess   = r - RF_DAILY
+    downside = np.minimum(excess, 0.0)
+    dd       = math.sqrt(float(np.mean(downside ** 2)))
+    if dd == 0.0:
+        return 0.0
+    return round(float(excess.mean()) / dd * math.sqrt(TRADING_YR), 4)
 
 
 def max_drawdown(closes: list[float]) -> float:
     """Maximum peak-to-trough drawdown as a negative percentage."""
     if len(closes) < 2:
         return 0.0
-    peak = closes[0]
-    mdd  = 0.0
-    for v in closes:
-        if v > peak:
-            peak = v
-        dd = (v - peak) / peak if peak else 0.0
-        if dd < mdd:
-            mdd = dd
-    return round(mdd * 100, 4)
+    c           = np.asarray(closes, dtype=np.float64)
+    running_max = np.maximum.accumulate(c)
+    dd          = np.where(running_max > 0, (c - running_max) / running_max, 0.0)
+    return round(float(dd.min()) * 100, 4)
 
 
 def beta(port_returns: list[float], mkt_returns: list[float]) -> float:
@@ -51,12 +53,13 @@ def beta(port_returns: list[float], mkt_returns: list[float]) -> float:
     n = min(len(port_returns), len(mkt_returns))
     if n < 20:
         return 1.0
-    pr = port_returns[:n]
-    mr = mkt_returns[:n]
-    mp, mm = mean(pr), mean(mr)
-    cov = sum((pr[i] - mp) * (mr[i] - mm) for i in range(n)) / (n - 1)
-    var = sum((mr[i] - mm) ** 2 for i in range(n)) / (n - 1)
-    return round(cov / var, 4) if var > 0 else 1.0
+    cov_matrix = np.cov(
+        np.asarray(port_returns[:n], dtype=np.float64),
+        np.asarray(mkt_returns[:n],  dtype=np.float64),
+        ddof=1,
+    )
+    var = float(cov_matrix[1, 1])
+    return round(float(cov_matrix[0, 1]) / var, 4) if var > 0 else 1.0
 
 
 def alpha(port_returns: list[float], mkt_returns: list[float], b: float) -> float:
@@ -64,8 +67,8 @@ def alpha(port_returns: list[float], mkt_returns: list[float], b: float) -> floa
     n = min(len(port_returns), len(mkt_returns))
     if n < 20:
         return 0.0
-    mp = mean(port_returns[:n])
-    mm = mean(mkt_returns[:n])
+    mp = float(np.mean(np.asarray(port_returns[:n], dtype=np.float64)))
+    mm = float(np.mean(np.asarray(mkt_returns[:n],  dtype=np.float64)))
     alpha_daily = mp - (RF_DAILY + b * (mm - RF_DAILY))
     return round(alpha_daily * TRADING_YR * 100, 4)
 
@@ -81,7 +84,8 @@ def win_rate(returns: list[float]) -> float:
     """Percentage of days where return exceeds the daily risk-free rate."""
     if not returns:
         return 0.0
-    return round(sum(1 for r in returns if r > RF_DAILY) / len(returns) * 100, 2)
+    r = np.asarray(returns, dtype=np.float64)
+    return round(float(np.mean(r > RF_DAILY)) * 100, 2)
 
 
 def information_ratio(port_returns: list[float], bench_returns: list[float]) -> float:
@@ -89,19 +93,21 @@ def information_ratio(port_returns: list[float], bench_returns: list[float]) -> 
     n = min(len(port_returns), len(bench_returns))
     if n < 20:
         return 0.0
-    active = [port_returns[i] - bench_returns[i] for i in range(n)]
-    m = mean(active)
-    s = std(active)
-    return round((m / s) * math.sqrt(TRADING_YR), 4) if s else 0.0
+    active = (
+        np.asarray(port_returns[:n], dtype=np.float64)
+        - np.asarray(bench_returns[:n], dtype=np.float64)
+    )
+    s = float(active.std(ddof=1))
+    return round(float(active.mean()) / s * math.sqrt(TRADING_YR), 4) if s else 0.0
 
 
 def value_at_risk(returns: list[float], confidence: float = 0.95) -> float:
     """Historical VaR at `confidence` level, expressed as positive percentage."""
     if len(returns) < 20:
         return 0.0
-    sorted_r = sorted(returns)
-    idx = int((1 - confidence) * len(sorted_r))
-    return round(abs(sorted_r[idx]) * 100, 4)
+    r   = np.asarray(returns, dtype=np.float64)
+    idx = int((1.0 - confidence) * len(r))
+    return round(float(np.abs(np.sort(r)[idx])) * 100, 4)
 
 
 def pearson_corr(x: list[float], y: list[float]) -> float | None:
@@ -109,11 +115,12 @@ def pearson_corr(x: list[float], y: list[float]) -> float | None:
     n = min(len(x), len(y))
     if n < 20:
         return None
-    xs, ys = x[:n], y[:n]
-    mx, my = mean(xs), mean(ys)
-    cov = sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / (n - 1)
-    sx, sy = std(xs), std(ys)
-    return round(cov / (sx * sy), 4) if sx and sy else None
+    corr_matrix = np.corrcoef(
+        np.asarray(x[:n], dtype=np.float64),
+        np.asarray(y[:n], dtype=np.float64),
+    )
+    c = float(corr_matrix[0, 1])
+    return round(c, 4) if np.isfinite(c) else None
 
 
 def compute_downside_risk(
@@ -129,26 +136,25 @@ def compute_downside_risk(
     if len(returns) < 20:
         return empty
 
+    r = np.asarray(returns, dtype=np.float64)
+
     # Downside deviation: semi-deviation below risk-free, annualised
-    dd_sq = sum(min(r - RF_DAILY, 0) ** 2 for r in returns) / len(returns)
-    ddn   = round(math.sqrt(dd_sq) * math.sqrt(TRADING_YR) * 100, 4)
+    downside = np.minimum(r - RF_DAILY, 0.0)
+    ddn      = round(float(np.sqrt(np.mean(downside ** 2))) * math.sqrt(TRADING_YR) * 100, 4)
 
     # Ulcer Index: RMS of running drawdown from portfolio value series
     if len(values) >= 2:
-        peak = values[0]
-        dd_pcts: list[float] = []
-        for v in values:
-            if v > peak:
-                peak = v
-            dd_pcts.append((v - peak) / peak * 100 if peak else 0.0)
-        ulcer = round(math.sqrt(sum(x * x for x in dd_pcts) / len(dd_pcts)), 4)
+        v           = np.asarray(values, dtype=np.float64)
+        running_max = np.maximum.accumulate(v)
+        dd_pcts     = np.where(running_max > 0, (v - running_max) / running_max * 100, 0.0)
+        ulcer       = round(float(np.sqrt(np.mean(dd_pcts ** 2))), 4)
     else:
         ulcer = 0.0
 
-    # Tail-loss (CVaR 95 %): average of worst 5 % daily returns
-    sorted_r  = sorted(returns)
+    # Tail-loss (CVaR 95 %): mean of worst 5 % daily returns
+    sorted_r  = np.sort(r)
     n5        = max(1, int(0.05 * len(sorted_r)))
-    tail_loss = round(abs(mean(sorted_r[:n5])) * 100, 4)
+    tail_loss = round(float(np.abs(sorted_r[:n5].mean())) * 100, 4)
 
     return {
         "downside_deviation": ddn,

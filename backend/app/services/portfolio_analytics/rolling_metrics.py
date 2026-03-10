@@ -1,14 +1,18 @@
 """
 Rolling analytics: rolling risk metrics, correlation, volatility regime,
 and rolling max drawdown.
-All functions operate on plain Python lists and return plain dicts.
+
+NumPy sliding_window_view replaces Python loops for O(n) vectorised
+computation across all rolling windows simultaneously.
 """
 from __future__ import annotations
 
 import math
 
+import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
+
 from .constants import RF_DAILY, TRADING_YR
-from .math_utils import mean, std
 
 
 def compute_rolling_returns(
@@ -41,7 +45,7 @@ def compute_rolling_returns(
         cur_year = dates[-1][:4]
         for i, d in enumerate(dates):
             if d[:4] == cur_year and i < len(values):
-                base = values[i]
+                base    = values[i]
                 ytd_pct = round((last / base - 1) * 100, 4) if base > 0 else None
                 break
 
@@ -64,48 +68,66 @@ def compute_rolling_risk_metrics(
     Rolling Sharpe, annualized volatility, beta vs SPY, and Sortino
     for each window size.
 
+    Uses sliding_window_view to batch-compute all windows in one pass
+    instead of nested Python loops.
+
     Returns {"63d": [...], "126d": [...], "252d": [...]}.
-    Each point: {"date", "rolling_sharpe", "rolling_volatility",
-                 "rolling_beta", "rolling_sortino"}.
-    Only points with a full window of data are emitted.
     """
-    n_ret = len(port_returns)
-    n_spy = len(spy_returns)
+    pr    = np.asarray(port_returns, dtype=np.float64)
+    n_ret = len(pr)
+    sr    = np.asarray(spy_returns, dtype=np.float64) if spy_returns else None
+
+    sqTR  = math.sqrt(TRADING_YR)
     result: dict[str, list[dict]] = {}
 
     for W in windows:
+        if n_ret < W:
+            result[f"{W}d"] = []
+            continue
+
+        # ── Sliding windows: shape (n_windows, W) ─────────────────────
+        pw        = sliding_window_view(pr, W)          # (n_windows, W)
+        n_windows = pw.shape[0]
+
+        # Per-window mean and std
+        w_mean = pw.mean(axis=1)                        # (n_windows,)
+        w_std  = pw.std(axis=1, ddof=1)                 # (n_windows,)
+        excess = w_mean - RF_DAILY
+
+        r_vol    = np.where(w_std > 0, w_std * sqTR * 100, np.nan)
+        r_sharpe = np.where(w_std > 0, excess / w_std * sqTR,   np.nan)
+
+        # Sortino: downside deviation per window
+        downside  = np.minimum(pw - RF_DAILY, 0.0)     # (n_windows, W)
+        dd_std    = np.sqrt(np.mean(downside ** 2, axis=1))
+        r_sortino = np.where(dd_std > 0, excess / dd_std * sqTR, np.nan)
+
+        # Rolling beta vs SPY (vectorised covariance)
+        r_beta = np.full(n_windows, np.nan, dtype=np.float64)
+        if sr is not None and len(sr) >= W:
+            sw      = sliding_window_view(sr[:n_ret], W) if len(sr) >= n_ret else \
+                      sliding_window_view(sr, W)
+            n_beta  = min(n_windows, sw.shape[0])
+            if n_beta > 0:
+                pw_b    = pw[:n_beta]                   # (n_beta, W)
+                sw_b    = sw[:n_beta]                   # (n_beta, W)
+                pm      = pw_b.mean(axis=1, keepdims=True)
+                mm      = sw_b.mean(axis=1, keepdims=True)
+                cov     = ((pw_b - pm) * (sw_b - mm)).sum(axis=1) / (W - 1)
+                var_spy = ((sw_b - mm) ** 2).sum(axis=1)          / (W - 1)
+                r_beta[:n_beta] = np.where(var_spy > 0, cov / var_spy, np.nan)
+
+        # ── Assemble result list ───────────────────────────────────────
+        nd = len(active_dates)
         series: list[dict] = []
-        for i in range(W - 1, n_ret):
-            pr = port_returns[i - W + 1 : i + 1]
-            # return[i] is the gain earned *on* active_dates[i+1]
-            d = active_dates[min(i + 1, len(active_dates) - 1)]
-
-            s        = std(pr)
-            m_excess = mean(pr) - RF_DAILY
-
-            r_vol     = round(s * math.sqrt(TRADING_YR) * 100, 2) if s else None
-            r_sharpe  = round((m_excess / s) * math.sqrt(TRADING_YR), 4) if s else None
-
-            dd_sq    = sum(min(r - RF_DAILY, 0) ** 2 for r in pr) / W
-            dd_std   = math.sqrt(dd_sq)
-            r_sortino = round((m_excess / dd_std) * math.sqrt(TRADING_YR), 4) if dd_std else None
-
-            r_beta: float | None = None
-            if n_spy >= i + 1:
-                mr = spy_returns[i - W + 1 : i + 1]
-                if len(mr) == W:
-                    mm = mean(mr)
-                    mp = mean(pr)
-                    cov_ = sum((pr[j] - mp) * (mr[j] - mm) for j in range(W)) / (W - 1)
-                    var_ = sum((mr[j] - mm) ** 2 for j in range(W)) / (W - 1)
-                    r_beta = round(cov_ / var_, 4) if var_ > 0 else None
-
+        for k in range(n_windows):
+            d = active_dates[min(k + W, nd - 1)]
             series.append({
                 "date":               d,
-                "rolling_sharpe":     r_sharpe,
-                "rolling_volatility": r_vol,
-                "rolling_beta":       r_beta,
-                "rolling_sortino":    r_sortino,
+                "rolling_sharpe":     _f4(r_sharpe[k]),
+                "rolling_volatility": _f2(r_vol[k]),
+                "rolling_beta":       _f4(r_beta[k]),
+                "rolling_sortino":    _f4(r_sortino[k]),
             })
         result[f"{W}d"] = series
 
@@ -118,19 +140,35 @@ def compute_rolling_correlation(
     active_dates:  list[str],
     window: int = 90,
 ) -> list[dict]:
-    """Rolling Pearson correlation vs a benchmark. Each point: {"date", "value"}."""
-    n = min(len(port_returns), len(bench_returns))
-    result: list[dict] = []
-    for i in range(window - 1, n):
-        pr = port_returns[i - window + 1 : i + 1]
-        br = bench_returns[i - window + 1 : i + 1]
-        d  = active_dates[min(i + 1, len(active_dates) - 1)]
+    """
+    Rolling Pearson correlation vs a benchmark.
+    Each point: {"date", "value"}.
 
-        mp, mb = mean(pr), mean(br)
-        cov_   = sum((pr[j] - mp) * (br[j] - mb) for j in range(window)) / (window - 1)
-        sp, sb = std(pr), std(br)
-        corr   = round(cov_ / (sp * sb), 4) if (sp and sb) else None
-        result.append({"date": d, "value": corr})
+    Uses sliding_window_view for vectorised covariance computation.
+    """
+    n = min(len(port_returns), len(bench_returns))
+    if n < window:
+        return []
+
+    pr = np.asarray(port_returns[:n], dtype=np.float64)
+    br = np.asarray(bench_returns[:n], dtype=np.float64)
+
+    pw = sliding_window_view(pr, window)   # (n_windows, window)
+    bw = sliding_window_view(br, window)
+
+    pm  = pw.mean(axis=1, keepdims=True)
+    bm  = bw.mean(axis=1, keepdims=True)
+    cov = ((pw - pm) * (bw - bm)).sum(axis=1) / (window - 1)
+    sp  = pw.std(axis=1, ddof=1)
+    sb  = bw.std(axis=1, ddof=1)
+    denom = sp * sb
+    corr  = np.where(denom > 0, cov / denom, np.nan)
+
+    nd     = len(active_dates)
+    result = []
+    for k in range(pw.shape[0]):
+        d = active_dates[min(k + window, nd - 1)]
+        result.append({"date": d, "value": _f4(corr[k])})
     return result
 
 
@@ -140,20 +178,28 @@ def compute_volatility_regime(
     window: int = 30,
 ) -> list[dict]:
     """
-    Classify each date into a volatility regime.
+    Classify each date into a volatility regime (low / normal / high).
 
-    Regime boundaries (annualised vol):
+    Regime thresholds (annualised vol):
         low    < 10 %
         normal 10 – 20 %
         high   > 20 %
-    Each point: {"date", "volatility", "regime"}.
+
+    Uses sliding_window_view for vectorised std computation.
     """
     n = len(port_returns)
-    result: list[dict] = []
-    for i in range(window - 1, n):
-        pr  = port_returns[i - window + 1 : i + 1]
-        d   = active_dates[min(i + 1, len(active_dates) - 1)]
-        vol = std(pr) * math.sqrt(TRADING_YR) * 100
+    if n < window:
+        return []
+
+    pr   = np.asarray(port_returns, dtype=np.float64)
+    pw   = sliding_window_view(pr, window)                         # (n_windows, window)
+    vols = pw.std(axis=1, ddof=1) * math.sqrt(TRADING_YR) * 100   # annualised %
+
+    nd     = len(active_dates)
+    result = []
+    for k in range(pw.shape[0]):
+        d   = active_dates[min(k + window, nd - 1)]
+        vol = float(vols[k])
         regime = "low" if vol < 10.0 else ("high" if vol > 20.0 else "normal")
         result.append({"date": d, "volatility": round(vol, 2), "regime": regime})
     return result
@@ -168,20 +214,38 @@ def compute_rolling_max_drawdown(
     Rolling maximum drawdown over `window` trading days.
 
     Each point: {"date", "drawdown"} — drawdown is a negative %.
-    Aligns to active_dates directly (not returns-offset).
+
+    Uses sliding_window_view + np.maximum.accumulate along axis=1
+    to vectorise the peak-to-trough computation.
     """
-    n      = len(values)
-    result: list[dict] = []
-    for i in range(window - 1, n):
-        wv   = values[i - window + 1 : i + 1]
-        d    = dates[i] if i < len(dates) else ""
-        peak = wv[0]
-        mdd  = 0.0
-        for v in wv:
-            if v > peak:
-                peak = v
-            dd = (v - peak) / peak * 100 if peak else 0.0
-            if dd < mdd:
-                mdd = dd
-        result.append({"date": d, "drawdown": round(mdd, 4)})
+    n = len(values)
+    if n < window:
+        return []
+
+    v  = np.asarray(values, dtype=np.float64)
+    vw = sliding_window_view(v, window)                            # (n_windows, window)
+
+    running_max = np.maximum.accumulate(vw, axis=1)
+    dd          = np.where(running_max > 0,
+                           (vw - running_max) / running_max * 100, 0.0)
+    mdd         = dd.min(axis=1)                                   # (n_windows,)
+
+    nd     = len(dates)
+    result = []
+    for k in range(vw.shape[0]):
+        idx = k + window - 1
+        d   = dates[idx] if idx < nd else ""
+        result.append({"date": d, "drawdown": round(float(mdd[k]), 4)})
     return result
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _f4(v: float) -> float | None:
+    """Round to 4dp, return None for non-finite values."""
+    return round(float(v), 4) if np.isfinite(v) else None
+
+
+def _f2(v: float) -> float | None:
+    """Round to 2dp, return None for non-finite values."""
+    return round(float(v), 2) if np.isfinite(v) else None

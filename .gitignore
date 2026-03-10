@@ -34,7 +34,7 @@ wheels/
 htmlcov/
 .tox/
 .nox/
-.venv
+.venv/
 venv/
 ENV/
 env.bak/
