@@ -109,6 +109,13 @@ class TransactionCreate(BaseModel):
     def upper_ticker(cls, v: str) -> str:
         return v.upper().strip()
 
+class TransactionUpdate(BaseModel):
+    shares:    Decimal  | None = Field(default=None, gt=0, decimal_places=6)
+    price:     Decimal  | None = Field(default=None, gt=0, decimal_places=6)
+    fees:      Decimal  | None = Field(default=None, ge=0, decimal_places=6)
+    traded_at: datetime | None = None
+    notes:     str      | None = None
+
 class TransactionResponse(BaseModel):
     id:        UUID
     ticker:    str

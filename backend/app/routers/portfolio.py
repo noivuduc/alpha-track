@@ -15,7 +15,7 @@ from app.models import User, Portfolio, Position, Transaction, WatchlistItem
 from app.schemas import (
     PortfolioCreate, PortfolioUpdate, PortfolioResponse,
     PositionCreate, PositionUpdate, PositionResponse,
-    TransactionCreate, TransactionResponse,
+    TransactionCreate, TransactionUpdate, TransactionResponse,
     WatchlistCreate, WatchlistResponse,
     PortfolioMetrics, PortfolioAnalytics,
 )
@@ -354,6 +354,35 @@ async def list_transactions(portfolio_id: UUID, user: User = Depends(check_rate_
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     result = await db.execute(select(Transaction).where(Transaction.portfolio_id == portfolio_id).order_by(Transaction.traded_at.desc()))
     return result.scalars().all()
+
+@router.patch("/{portfolio_id}/transactions/{txn_id}", response_model=TransactionResponse)
+async def update_transaction(
+    portfolio_id: UUID, txn_id: UUID, body: TransactionUpdate,
+    user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db),
+):
+    p = await db.get(Portfolio, portfolio_id)
+    if not p or p.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    txn = await db.get(Transaction, txn_id)
+    if not txn or txn.portfolio_id != portfolio_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    for k, v in body.model_dump(exclude_none=True).items():
+        setattr(txn, k, v)
+    await db.flush()
+    return txn
+
+@router.delete("/{portfolio_id}/transactions/{txn_id}", status_code=204)
+async def delete_transaction(
+    portfolio_id: UUID, txn_id: UUID,
+    user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db),
+):
+    p = await db.get(Portfolio, portfolio_id)
+    if not p or p.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    txn = await db.get(Transaction, txn_id)
+    if not txn or txn.portfolio_id != portfolio_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    await db.delete(txn)
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────
 @router.get("/watchlist/", response_model=list[WatchlistResponse])

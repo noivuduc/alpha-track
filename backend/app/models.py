@@ -96,7 +96,7 @@ class Transaction(Base):
     id:           Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     portfolio_id: Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
     ticker:       Mapped[str]        = mapped_column(String(20), nullable=False, index=True)
-    side:         Mapped[OrderSide]  = mapped_column(Enum(OrderSide), nullable=False)
+    side:         Mapped[OrderSide]  = mapped_column(Enum(OrderSide, name="order_side"), nullable=False)
     shares:       Mapped[Decimal]    = mapped_column(Numeric(18, 6), nullable=False)
     price:        Mapped[Decimal]    = mapped_column(Numeric(18, 6), nullable=False)
     fees:         Mapped[Decimal]    = mapped_column(Numeric(18, 6), default=0, nullable=False)

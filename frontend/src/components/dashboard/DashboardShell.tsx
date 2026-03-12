@@ -270,6 +270,7 @@ export default function DashboardShell() {
               <HoldingsTab
                 portfolioId={selected.id}
                 data={positions}
+                analytics={analytics}
                 onRefresh={() => {
                   loadPositions(selected.id);
                   loadAnalytics(selected.id, period, true);

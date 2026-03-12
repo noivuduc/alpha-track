@@ -13,8 +13,7 @@ import {
 } from "@/lib/api";
 import { fmt, fmtCurrency } from "@/lib/portfolio-math";
 
-const DrawdownChart  = dynamic(() => import("@/components/charts/DrawdownChart"),  { ssr: false });
-const MonthlyHeatmap = dynamic(() => import("@/components/charts/MonthlyHeatmap"), { ssr: false });
+const DrawdownChart = dynamic(() => import("@/components/charts/DrawdownChart"), { ssr: false });
 
 type Range         = "1M" | "3M" | "6M" | "YTD" | "1Y";
 type RollingWindow = "63d" | "126d" | "252d";
@@ -573,14 +572,6 @@ export default function RiskTab({ analytics: a, loading, period }: Props) {
         ) : (
           <Empty msg="No drawdown data" />
         )}
-      </div>
-
-      {/* Monthly heatmap */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-        <h3 className="text-sm font-semibold text-zinc-300 mb-4">Monthly Returns</h3>
-        {a.monthly_returns.length > 0
-          ? <MonthlyHeatmap data={a.monthly_returns} />
-          : <Empty msg="No monthly data" />}
       </div>
 
       {/* Row 4 — Risk Metrics | Portfolio Characteristics */}
