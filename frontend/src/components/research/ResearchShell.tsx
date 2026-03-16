@@ -16,6 +16,7 @@ import OwnershipSection    from "./OwnershipSection";
 import EstimatesSection    from "./EstimatesSection";
 import NewsSection         from "./NewsSection";
 import RevenueSegmentation from "./RevenueSegmentation";
+import GrowthProfitabilityScatter from "./GrowthProfitabilityScatter";
 import ResearchNav, { NavSection } from "./ResearchNav";
 import PeerComparison      from "./PeerComparison";
 import HistoricalValuation from "./HistoricalValuation";
@@ -44,8 +45,9 @@ const ALL_NAV: NavSection[] = [
   { id: "sec-metrics",    label: "Key Metrics"         },
   { id: "sec-trends",     label: "Financial Trends"    },
   { id: "sec-signals",    label: "Financial Signals"   },
-  { id: "sec-segments",   label: "Revenue Drivers"     },
-  { id: "sec-statements", label: "Statements"          },
+  { id: "sec-segments",   label: "Revenue Drivers"         },
+  { id: "sec-growth",     label: "Growth vs Profitability" },
+  { id: "sec-statements", label: "Statements"              },
   { id: "sec-val-history",label: "Historical Valuation"},
   { id: "sec-peers",      label: "Peer Comparison"     },
   { id: "sec-estimates",  label: "Estimates"           },
@@ -134,6 +136,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
     if (s.id === "sec-trends"      && !hasFinancials) return false;
     if (s.id === "sec-statements"  && !hasFinancials) return false;
     if (s.id === "sec-segments"    && !hasSegments)   return false;
+    if (s.id === "sec-growth"      && !hasFinancials) return false;
     if (s.id === "sec-estimates"   && !estimates.annual.length && !estimates.quarterly.length) return false;
     if (s.id === "sec-news"        && !news.length)   return false;
     if (s.id === "sec-peers"       && !hasPeers)      return false;
@@ -314,6 +317,18 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             {hasSegments && (
               <SectionPanel title="Revenue Drivers" id="sec-segments">
                 <RevenueSegmentation segments={segments} />
+              </SectionPanel>
+            )}
+
+            {/* 6b. Growth vs Profitability */}
+            {hasFinancials && (
+              <SectionPanel title="Growth vs Profitability" id="sec-growth">
+                <GrowthProfitabilityScatter
+                  ticker={sym}
+                  incomeAnnual={financials.income_annual}
+                  selfMetrics={selfMetrics}
+                  peers={research.peers}
+                />
               </SectionPanel>
             )}
 
