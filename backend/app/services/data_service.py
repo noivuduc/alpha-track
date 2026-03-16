@@ -66,19 +66,23 @@ class DataService:
     async def get_price(self, ticker: str) -> dict[str, Any]:
         key = _price_key(ticker)
 
-        # L1: Redis
+        # L1: Redis — skip cache if price is zero (stale bad entry)
         cached = await self.cache.get(key)
         if cached:
             data = json.loads(cached)
-            data["_source"] = "cache_redis"
-            return data
+            if data.get("price", 0) > 0:
+                data["_source"] = "cache_redis"
+                return data
+            # Zero cached price: fall through to live fetch
+            await self.cache.delete(key)
 
         # Fetch from yfinance (free)
         data = await self._fetch_price_yfinance(ticker)
         data["_source"] = "yfinance"
 
-        # Store in L1 (Redis)
-        await self.cache.set(key, json.dumps(data), settings.CACHE_PRICE_TTL)
+        # Store in L1 (Redis) — never cache a zero price (failed fetch)
+        if data.get("price", 0) > 0:
+            await self.cache.set(key, json.dumps(data), settings.CACHE_PRICE_TTL)
         return data
 
     async def get_prices_bulk(self, tickers: list[str]) -> dict[str, dict]:
@@ -89,17 +93,23 @@ class DataService:
         for t in tickers:
             cached = await self.cache.get(_price_key(t))
             if cached:
-                results[t] = json.loads(cached)
-                results[t]["_source"] = "cache_redis"
-            else:
-                missing.append(t)
+                data = json.loads(cached)
+                if data.get("price", 0) > 0:
+                    results[t] = data
+                    results[t]["_source"] = "cache_redis"
+                    continue
+                # Zero cached price: treat as missing, delete stale entry
+                await self.cache.delete(_price_key(t))
+            missing.append(t)
 
         if missing:
             fetched = await self._fetch_prices_bulk_yfinance(missing)
             for ticker, data in fetched.items():
                 data["_source"] = "yfinance"
                 results[ticker] = data
-                await self.cache.set(_price_key(ticker), json.dumps(data), settings.CACHE_PRICE_TTL)
+                # Never cache a zero price (failed yfinance fetch)
+                if data.get("price", 0) > 0:
+                    await self.cache.set(_price_key(ticker), json.dumps(data), settings.CACHE_PRICE_TTL)
 
         return results
 
