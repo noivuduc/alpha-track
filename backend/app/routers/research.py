@@ -11,6 +11,8 @@ from app.config import get_settings
 from app.database import get_db, get_cache, Cache
 from app.middleware import check_rate_limit
 from app.models import User
+from app.services.insights    import compute_insights
+from app.services.ai_insights import generate_ai_insights, ai_cache_key
 
 log      = logging.getLogger(__name__)
 settings = get_settings()
@@ -309,6 +311,11 @@ def _build_trends(income: list, cashflow: list, metrics_history: list, is_quarte
 
 
 def _compute_insights(sym: str, data: dict) -> dict:
+    """Thin wrapper — delegates to the modular insights service."""
+    return compute_insights(sym, data)
+
+
+def _compute_insights_ORIGINAL_KEPT_FOR_REFERENCE(sym: str, data: dict) -> dict:  # noqa: F811
     bull = []
     bear = []
     catalysts = []
@@ -899,3 +906,53 @@ async def get_research(
 
     await cache.set(cache_key, json.dumps(response, default=str), 3600)
     return response
+
+
+# ── AI Insights endpoint ──────────────────────────────────────────────────────
+
+@router.get("/{ticker}/ai-insights")
+async def get_ai_insights(
+    ticker:   str,
+    provider: str  = Query("anthropic", description="AI provider: 'anthropic' or 'openai'"),
+    force:    bool = Query(False,        description="Bypass 7-day AI cache"),
+    user:     User  = Depends(check_rate_limit),
+    cache:    Cache = Depends(get_cache),
+):
+    """
+    Return AI-generated investment insights for *ticker*.
+
+    Each provider has its own 7-day cache slot:
+      alphadesk:ai_insight:{TICKER}:anthropic  — Claude Haiku
+      alphadesk:ai_insight:{TICKER}:openai     — GPT-4.1 Mini
+
+    On cache miss the endpoint reads research data from the 1-hour research
+    cache (research7:{TICKER}) — the caller must load the research page first.
+    """
+    from fastapi import HTTPException
+    from app.services.ai_insights import PROVIDER_MODELS
+
+    sym = ticker.upper().strip()
+
+    if provider not in PROVIDER_MODELS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{provider}'. Use 'anthropic' or 'openai'.")
+
+    # Fast-path: return cached result for this provider
+    if not force:
+        cached_ai = await cache.get(ai_cache_key(sym, provider))  # type: ignore[arg-type]
+        if cached_ai:
+            import json as _json
+            result = _json.loads(cached_ai)
+            result["_source"] = "cache"
+            return result
+
+    # Need base research data to build the AI prompt context
+    research_raw = await cache.get(_cache_key(sym))
+    if not research_raw:
+        raise HTTPException(
+            status_code=404,
+            detail="Research data not cached. Load the research page first to populate the cache.",
+        )
+
+    import json as _json
+    research_data = _json.loads(research_raw)
+    return await generate_ai_insights(sym, research_data, cache, provider=provider)  # type: ignore[arg-type]

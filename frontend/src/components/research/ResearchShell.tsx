@@ -23,6 +23,7 @@ import HistoricalValuation from "./HistoricalValuation";
 import EarningsReaction    from "./EarningsReaction";
 import InvestmentInsights  from "./InvestmentInsights";
 import FinancialSignals    from "./FinancialSignals";
+import AiAnalysis          from "./AiAnalysis";
 import { PeerMetrics }     from "@/lib/api";
 
 const FinancialCharts     = dynamic(() => import("./FinancialCharts"),     { ssr: false });
@@ -41,6 +42,7 @@ function fmtLarge(n: number | undefined | null): string {
 const ALL_NAV: NavSection[] = [
   { id: "sec-overview",   label: "Overview"           },
   { id: "sec-insights",   label: "Investment Insights" },
+  { id: "sec-ai",         label: "AI Analysis"         },
   { id: "sec-price",      label: "Price Chart"         },
   { id: "sec-metrics",    label: "Key Metrics"         },
   { id: "sec-trends",     label: "Financial Trends"    },
@@ -284,6 +286,11 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
                 <InvestmentInsights insights={analysis.insights} sections={["bull", "catalysts"]} />
               </SectionPanel>
             )}
+
+            {/* 2b. AI Analysis */}
+            <SectionPanel title="AI Analysis" id="sec-ai" defaultOpen={false}>
+              <AiAnalysis ticker={sym} />
+            </SectionPanel>
 
             {/* 3. Price Chart */}
             <SectionPanel title="Stock Price" id="sec-price">
