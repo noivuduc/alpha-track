@@ -328,6 +328,8 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
                   incomeAnnual={financials.income_annual}
                   selfMetrics={selfMetrics}
                   peers={research.peers}
+                  selfPeg={profile.peg_ratio}
+                  selfEvSales={profile.ev_revenue}
                 />
               </SectionPanel>
             )}
