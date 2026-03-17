@@ -6,6 +6,11 @@ sub-modules in sequence and assembles the final analytics dict that maps
 1-to-1 onto the PortfolioAnalytics Pydantic schema.
 
 Zero I/O: accepts plain Python dicts/lists and returns plain Python dicts.
+
+CONSISTENCY NOTE: All metric functions are imported from portfolio_metrics
+(the single source of truth).  The simulation service imports from the same
+module, guaranteeing both systems compute identical Sharpe / Sortino / beta
+values when given the same return series.
 """
 from __future__ import annotations
 
@@ -15,10 +20,13 @@ from .return_series import (
     build_cash_flows, compute_twr_returns,
 )
 from .math_utils import pct_change
-from .risk_metrics import (
+# ── Import ALL metrics from the canonical SoT module ──────────────────────────
+from .portfolio_metrics import (
     beta, alpha, sharpe, sortino, max_drawdown, calmar,
     win_rate, information_ratio, value_at_risk, pearson_corr,
     compute_downside_risk,
+    compute_snapshot,                            # used for debug logging
+    annualized_return, annualized_vol,
 )
 from .rolling_metrics import (
     compute_rolling_returns,
@@ -150,7 +158,7 @@ def compute_engine(
     ir  = information_ratio(port_returns, bm_returns) if bm_returns else 0.0
     var = value_at_risk(port_returns)
 
-    from .return_series import annualized_return, annualized_vol
+    # annualized_return / annualized_vol imported at module level from portfolio_metrics
     risk_metrics: dict = {
         "sharpe":                sharpe(port_returns),
         "sortino":               sortino(port_returns),
@@ -340,8 +348,6 @@ def compute_all(
     Legacy wrapper.  Uses fixed-weight approximation.
     New code should call compute_engine() instead.
     """
-    from .return_series import annualized_return, annualized_vol
-
     n = len(dates)
 
     port_returns = build_portfolio_returns(aligned, weights, n)

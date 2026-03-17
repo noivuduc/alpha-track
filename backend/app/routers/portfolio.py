@@ -18,9 +18,11 @@ from app.schemas import (
     TransactionCreate, TransactionUpdate, TransactionResponse,
     WatchlistCreate, WatchlistResponse,
     PortfolioMetrics, PortfolioAnalytics,
+    SimulateRequest, SimulateResponse,
 )
 from app.services.data_service import DataService
 from app.services import analytics as A
+from app.services.simulation_service import simulate_add_position
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -251,6 +253,53 @@ async def get_analytics(
     # ── Cache for 60 seconds ────────────────────────────────
     await cache.set(cache_key, _json.dumps(response), 60)
     return response
+
+
+# ── Portfolio Simulation ──────────────────────────────────────────────────────
+@router.post("/{portfolio_id}/simulate", response_model=SimulateResponse)
+async def simulate_portfolio(
+    portfolio_id: UUID,
+    body:      SimulateRequest,
+    benchmark: str          = Query("SPY", description="Benchmark for beta/alpha"),
+    user: User              = Depends(check_rate_limit),
+    db: AsyncSession        = Depends(get_db),
+    ds: DataService         = Depends(_get_ds),
+):
+    """
+    Simulate adding a new position at a given portfolio weight.
+
+    Returns before/after risk metrics, sector exposure delta, and AI-style
+    plain-English insights comparing the two portfolios.
+    """
+    p = await db.get(Portfolio, portfolio_id)
+    if not p or p.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
+
+    pos_r = await db.execute(
+        select(Position).where(
+            Position.portfolio_id == portfolio_id,
+            Position.closed_at    == None,
+        )
+    )
+    positions = pos_r.scalars().all()
+    if not positions:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Portfolio has no open positions",
+        )
+
+    try:
+        result = await simulate_add_position(
+            positions      = positions,
+            new_ticker     = body.ticker,
+            new_weight_pct = body.weight_pct,
+            ds             = ds,
+            benchmark      = benchmark,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    return result
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────

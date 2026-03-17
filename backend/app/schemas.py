@@ -380,6 +380,50 @@ class PortfolioAnalytics(BaseModel):
     weekly_returns:          list[WeeklyReturn]               | None = None
     period_extremes:         PeriodExtremes                   | None = None
 
+# ── Portfolio Simulation ──────────────────────────────────────────────────────
+
+class SimulateRequest(BaseModel):
+    ticker:     str   = Field(min_length=1, max_length=20)
+    weight_pct: float = Field(gt=0, lt=100, description="Target weight 0–100 (exclusive)")
+
+    @field_validator("ticker")
+    @classmethod
+    def upper_ticker(cls, v: str) -> str:
+        return v.upper().strip()
+
+
+class SimulateSnapshot(BaseModel):
+    sharpe:                float
+    sortino:               float
+    beta:                  float
+    alpha_pct:             float
+    max_drawdown_pct:      float
+    volatility_pct:        float
+    annualized_return_pct: float
+    var_95_pct:            float
+
+
+class SimulateDelta(BaseModel):
+    sharpe:                float
+    sortino:               float
+    beta:                  float
+    alpha_pct:             float
+    max_drawdown_pct:      float
+    volatility_pct:        float
+    annualized_return_pct: float
+    var_95_pct:            float
+
+
+class SimulateResponse(BaseModel):
+    before:                      SimulateSnapshot
+    after:                       SimulateSnapshot
+    delta:                       SimulateDelta
+    exposure:                    dict[str, Any]   # {sector_before, sector_after}
+    insights:                    list[str]
+    new_ticker_weight_pct:       float
+    correlation_with_portfolio:  float | None = None
+
+
 # ── Admin ─────────────────────────────────────────────────────────────────────
 class AdminStats(BaseModel):
     total_users:    int

@@ -3,7 +3,7 @@ import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  LayoutDashboard, BarChart2, ShieldAlert,
+  LayoutDashboard, BarChart2, ShieldAlert, FlaskConical,
   Plus, ChevronDown, LogOut, RefreshCw,
 } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
@@ -13,17 +13,19 @@ import {
 } from "@/lib/api";
 import SearchAutocomplete from "@/components/research/SearchAutocomplete";
 
-const OverviewTab = dynamic(() => import("./OverviewTab"), { ssr: false });
-const HoldingsTab = dynamic(() => import("./HoldingsTab"), { ssr: false });
-const RiskTab     = dynamic(() => import("./RiskTab"),     { ssr: false });
+const OverviewTab   = dynamic(() => import("./OverviewTab"),   { ssr: false });
+const HoldingsTab   = dynamic(() => import("./HoldingsTab"),   { ssr: false });
+const RiskTab       = dynamic(() => import("./RiskTab"),       { ssr: false });
+const SimulatorTab  = dynamic(() => import("./SimulatorTab"),  { ssr: false });
 
-type Tab    = "overview" | "holdings" | "risk";
+type Tab    = "overview" | "holdings" | "risk" | "simulator";
 type Period = "1mo" | "3mo" | "6mo" | "ytd" | "1y" | "2y";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview", label: "Overview", icon: <LayoutDashboard size={16} /> },
-  { id: "holdings", label: "Holdings", icon: <BarChart2 size={16} />       },
-  { id: "risk",     label: "Risk",     icon: <ShieldAlert size={16} />     },
+  { id: "overview",   label: "Overview",   icon: <LayoutDashboard size={16} /> },
+  { id: "holdings",   label: "Holdings",   icon: <BarChart2 size={16} />       },
+  { id: "risk",       label: "Risk",       icon: <ShieldAlert size={16} />     },
+  { id: "simulator",  label: "Simulator",  icon: <FlaskConical size={16} />    },
 ];
 
 const tierBadge: Record<string, string> = {
@@ -283,6 +285,9 @@ export default function DashboardShell() {
                 loading={analyticsLoading}
                 period={period}
               />
+            )}
+            {tab === "simulator" && (
+              <SimulatorTab portfolioId={selected.id} />
             )}
           </>
         )}
