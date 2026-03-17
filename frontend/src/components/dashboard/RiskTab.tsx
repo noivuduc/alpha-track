@@ -10,8 +10,10 @@ import {
 import {
   PortfolioAnalytics, DerivedMetrics, BenchmarkComparison, PerformanceSummary,
   RollingMetricPoint, RollingCorrelationPoint, VolatilityRegimePoint,
+  PortfolioAnalysisResponse,
 } from "@/lib/api";
 import { fmt, fmtCurrency } from "@/lib/portfolio-math";
+import { CorrelationClusterCard } from "./AnalysisTab";
 
 const DrawdownChart = dynamic(() => import("@/components/charts/DrawdownChart"), { ssr: false });
 
@@ -26,9 +28,10 @@ const WINDOWS: { key: RollingWindow; label: string }[] = [
 ];
 
 interface Props {
-  analytics: PortfolioAnalytics | null;
-  loading:   boolean;
-  period:    string;
+  analytics:  PortfolioAnalytics | null;
+  loading:    boolean;
+  period:     string;
+  analysis?:  PortfolioAnalysisResponse | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -465,9 +468,12 @@ function Empty({ msg = "Not enough data" }: { msg?: string }) {
 
 // ── Main ───────────────────────────────────────────────────────────────────────
 
-export default function RiskTab({ analytics: a, loading, period }: Props) {
+export default function RiskTab({ analytics: a, loading, period, analysis }: Props) {
   const [window,    setWindow]    = useState<RollingWindow>("126d");
   const [ddRange,   setDdRange]   = useState<Range>("1Y");
+
+  // Filter to multi-asset clusters only; computed from analysis prop
+  const multiClusters = (analysis?.clusters ?? []).filter(c => c.assets.length >= 2);
 
   if (loading && !a) {
     return (
@@ -611,6 +617,43 @@ export default function RiskTab({ analytics: a, loading, period }: Props) {
             {dm ? <DrawdownStatus dm={dm} /> : <div className="text-xs text-zinc-500">Unavailable</div>}
           </Panel>
         </div>
+      </div>
+
+      {/* ── Correlation Clusters ─────────────────────────────────────────── */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-zinc-100 font-semibold text-base">Correlation Risk</h2>
+          {multiClusters.length > 0 && (
+            <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded-full">
+              {multiClusters.length}
+            </span>
+          )}
+        </div>
+
+        {!analysis ? (
+          /* Analysis not yet loaded */
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 h-32 animate-pulse" />
+            ))}
+          </div>
+        ) : multiClusters.length === 0 ? (
+          /* Analysis loaded, no correlated clusters found */
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex items-center gap-3">
+            <span className="text-emerald-400 text-lg">✓</span>
+            <p className="text-zinc-400 text-sm">
+              No highly correlated asset clusters detected (threshold ≥ 0.70).
+              Your portfolio positions are behaving independently.
+            </p>
+          </div>
+        ) : (
+          /* Clusters found */
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {multiClusters.map(c => (
+              <CorrelationClusterCard key={c.cluster_id} cluster={c} />
+            ))}
+          </div>
+        )}
       </div>
 
     </div>

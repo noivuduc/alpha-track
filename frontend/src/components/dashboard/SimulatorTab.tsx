@@ -398,8 +398,11 @@ function MetricRow({ label, before, after, suffix = "", invert = false }:
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function SimulatorTab({ portfolioId }: { portfolioId: string }) {
-  const [ticker,    setTicker]    = useState("");
+export default function SimulatorTab({
+  portfolioId,
+  prefillTicker,
+}: { portfolioId: string; prefillTicker?: string }) {
+  const [ticker,    setTicker]    = useState(prefillTicker ?? "");
   const [weightPct, setWeightPct] = useState(10);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);

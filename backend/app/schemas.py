@@ -380,6 +380,50 @@ class PortfolioAnalytics(BaseModel):
     weekly_returns:          list[WeeklyReturn]               | None = None
     period_extremes:         PeriodExtremes                   | None = None
 
+# ── Portfolio Analysis (Health / Rebalancing / Clusters) ─────────────────────
+
+class HealthBreakdown(BaseModel):
+    diversification:      float
+    concentration:        float
+    risk_adjusted_return: float
+    drawdown:             float
+    correlation:          float
+
+
+class HealthScore(BaseModel):
+    score:      float
+    grade:      str            # A / B / C / D / F
+    breakdown:  HealthBreakdown
+    insights:   list[str]
+    top_issues: list[str] = []  # up to 2 most critical items for quick display
+
+
+class RebalancingSuggestion(BaseModel):
+    action:        str             # "reduce" | "increase" | "add"
+    ticker:        str | None = None
+    sector:        str | None = None
+    reason:        str
+    impact:        str
+    priority:      str             # "high" | "medium" | "low"
+    metrics_delta: dict[str, str] | None = None  # e.g. {"sharpe": "+0.08", "volatility_pct": "-1.2%"}
+
+
+class CorrelationCluster(BaseModel):
+    cluster_id:      int
+    assets:          list[str]
+    avg_correlation: float
+    label:           str
+    insight:         str | None = None
+
+
+class PortfolioAnalysisResponse(BaseModel):
+    portfolio_id: str
+    computed_at:  str
+    health:       HealthScore
+    suggestions:  list[RebalancingSuggestion]
+    clusters:     list[CorrelationCluster]
+
+
 # ── Portfolio Simulation ──────────────────────────────────────────────────────
 
 class SimulateRequest(BaseModel):

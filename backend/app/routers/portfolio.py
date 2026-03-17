@@ -19,10 +19,12 @@ from app.schemas import (
     WatchlistCreate, WatchlistResponse,
     PortfolioMetrics, PortfolioAnalytics,
     SimulateRequest, SimulateResponse,
+    PortfolioAnalysisResponse,
 )
 from app.services.data_service import DataService
 from app.services import analytics as A
 from app.services.simulation_service import simulate_add_position
+from app.services.portfolio_analysis_service import run_portfolio_analysis
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -253,6 +255,48 @@ async def get_analytics(
     # ── Cache for 60 seconds ────────────────────────────────
     await cache.set(cache_key, _json.dumps(response), 60)
     return response
+
+
+# ── Portfolio Analysis (Health / Suggestions / Clusters) ─────────────────────
+@router.get("/{portfolio_id}/analysis", response_model=PortfolioAnalysisResponse)
+async def get_portfolio_analysis(
+    portfolio_id: UUID,
+    force:       bool        = Query(False, description="Bypass 15-min cache"),
+    user: User               = Depends(check_rate_limit),
+    db: AsyncSession         = Depends(get_db),
+    ds: DataService          = Depends(_get_ds),
+    cache: Cache             = Depends(get_cache),
+):
+    """
+    Portfolio decision engine: health score, rebalancing suggestions,
+    and correlation clusters — all computed from live TWR returns.
+
+    Results cached 15 minutes (bypass with force=true).
+    """
+    p = await db.get(Portfolio, portfolio_id)
+    if not p or p.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
+
+    pos_r = await db.execute(
+        select(Position).where(
+            Position.portfolio_id == portfolio_id,
+            Position.closed_at    == None,
+        )
+    )
+    positions = pos_r.scalars().all()
+    if not positions:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Portfolio has no open positions",
+        )
+
+    return await run_portfolio_analysis(
+        positions    = positions,
+        ds           = ds,
+        cache        = cache,
+        portfolio_id = str(portfolio_id),
+        force        = force,
+    )
 
 
 # ── Portfolio Simulation ──────────────────────────────────────────────────────

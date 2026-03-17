@@ -9,23 +9,23 @@ import {
 import { useAuth } from "@/components/AuthProvider";
 import {
   portfolios as portApi, positions as posApi,
-  Portfolio, Position, PortfolioAnalytics,
+  Portfolio, Position, PortfolioAnalytics, PortfolioAnalysisResponse,
 } from "@/lib/api";
 import SearchAutocomplete from "@/components/research/SearchAutocomplete";
 
-const OverviewTab   = dynamic(() => import("./OverviewTab"),   { ssr: false });
-const HoldingsTab   = dynamic(() => import("./HoldingsTab"),   { ssr: false });
-const RiskTab       = dynamic(() => import("./RiskTab"),       { ssr: false });
-const SimulatorTab  = dynamic(() => import("./SimulatorTab"),  { ssr: false });
+const OverviewTab  = dynamic(() => import("./OverviewTab"),  { ssr: false });
+const HoldingsTab  = dynamic(() => import("./HoldingsTab"),  { ssr: false });
+const RiskTab      = dynamic(() => import("./RiskTab"),      { ssr: false });
+const SimulatorTab = dynamic(() => import("./SimulatorTab"), { ssr: false });
 
 type Tab    = "overview" | "holdings" | "risk" | "simulator";
 type Period = "1mo" | "3mo" | "6mo" | "ytd" | "1y" | "2y";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview",   label: "Overview",   icon: <LayoutDashboard size={16} /> },
-  { id: "holdings",   label: "Holdings",   icon: <BarChart2 size={16} />       },
-  { id: "risk",       label: "Risk",       icon: <ShieldAlert size={16} />     },
-  { id: "simulator",  label: "Simulator",  icon: <FlaskConical size={16} />    },
+  { id: "overview",  label: "Overview",  icon: <LayoutDashboard size={16} /> },
+  { id: "holdings",  label: "Holdings",  icon: <BarChart2 size={16} />       },
+  { id: "risk",      label: "Risk",      icon: <ShieldAlert size={16} />     },
+  { id: "simulator", label: "Simulator", icon: <FlaskConical size={16} />    },
 ];
 
 const tierBadge: Record<string, string> = {
@@ -38,7 +38,8 @@ export default function DashboardShell() {
   const { user, logout } = useAuth();
   const router = useRouter();
 
-  const [tab,         setTab]         = useState<Tab>("overview");
+  const [tab,        setTab]        = useState<Tab>("overview");
+  const [simPrefill, setSimPrefill] = useState<string | undefined>(undefined);
   const period: Period = "1y";
   const [portfolios,  setPortfolios]  = useState<Portfolio[]>([]);
   const [selected,    setSelected]    = useState<Portfolio | null>(null);
@@ -48,8 +49,9 @@ export default function DashboardShell() {
   const [newPortName, setNewPortName] = useState("");
   const [creating,    setCreating]    = useState(false);
   const [showCreate,  setShowCreate]  = useState(false);
-  const [loadingData, setLoadingData] = useState(false);
+  const [loadingData,      setLoadingData]      = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analysis,         setAnalysis]         = useState<PortfolioAnalysisResponse | null>(null);
 
   // ── Load portfolios on mount ─────────────────────────────
   useEffect(() => {
@@ -79,16 +81,25 @@ export default function DashboardShell() {
       .finally(() => setAnalyticsLoading(false));
   }, []);
 
+  // ── Load portfolio analysis (health/suggestions/clusters) ─
+  const loadAnalysis = useCallback((pid: string, force = false) => {
+    portApi.analysis(pid, force)
+      .then(setAnalysis)
+      .catch(e => { console.error(e); setAnalysis(null); });
+  }, []);
+
   useEffect(() => {
     if (!selected) return;
     loadPositions(selected.id);
     loadAnalytics(selected.id, period);
-  }, [selected, period, loadPositions, loadAnalytics]);
+    loadAnalysis(selected.id);
+  }, [selected, period, loadPositions, loadAnalytics, loadAnalysis]);
 
   const handleRefresh = () => {
     if (!selected) return;
     loadPositions(selected.id);
     loadAnalytics(selected.id, period, true); // force = bypass cache
+    loadAnalysis(selected.id, true);
   };
 
   const handleLogout = async () => {
@@ -260,15 +271,17 @@ export default function DashboardShell() {
           </div>
         ) : (
           <>
-            {tab === "overview"     && (
+            {tab === "overview"  && (
               <OverviewTab
                 analytics={analytics}
                 positions={positions}
                 loading={analyticsLoading}
                 period={period}
+                analysis={analysis}
+                onOpenSimulator={ticker => { setSimPrefill(ticker); setTab("simulator"); }}
               />
             )}
-            {tab === "holdings"     && (
+            {tab === "holdings"  && (
               <HoldingsTab
                 portfolioId={selected.id}
                 data={positions}
@@ -279,15 +292,16 @@ export default function DashboardShell() {
                 }}
               />
             )}
-            {tab === "risk" && (
+            {tab === "risk"      && (
               <RiskTab
                 analytics={analytics}
                 loading={analyticsLoading}
                 period={period}
+                analysis={analysis}
               />
             )}
             {tab === "simulator" && (
-              <SimulatorTab portfolioId={selected.id} />
+              <SimulatorTab portfolioId={selected.id} prefillTicker={simPrefill} />
             )}
           </>
         )}

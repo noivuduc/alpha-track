@@ -8,18 +8,21 @@ import {
 } from "recharts";
 import {
   Position, PortfolioAnalytics, ContributionEntry, PositionAnalyticsEntry,
-  PortfolioNewsItem,
+  PortfolioNewsItem, PortfolioAnalysisResponse,
 } from "@/lib/api";
+import { PortfolioHealthCard, SuggestionCard } from "./AnalysisTab";
 import { fmt, fmtCurrency, fmtLarge, gainClass } from "@/lib/portfolio-math";
 
 const PerformanceChart = dynamic(() => import("@/components/charts/PerformanceChart"), { ssr: false });
 const ReturnsHeatmap   = dynamic(() => import("@/components/charts/ReturnsHeatmap"),   { ssr: false });
 
 interface Props {
-  analytics: PortfolioAnalytics | null;
-  positions: Position[];
-  loading:   boolean;
-  period:    string;
+  analytics:        PortfolioAnalytics | null;
+  positions:        Position[];
+  loading:          boolean;
+  period:           string;
+  analysis?:        PortfolioAnalysisResponse | null;
+  onOpenSimulator?: (ticker: string) => void;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -476,7 +479,7 @@ function NewsItem({ item }: { item: PortfolioNewsItem }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-export default function OverviewTab({ analytics: a, positions, loading }: Props) {
+export default function OverviewTab({ analytics: a, positions, loading, analysis, onOpenSimulator }: Props) {
   const [range, setRange] = useState<Range>("1Y");
 
   const dayPositive  = (a?.day_gain   ?? 0) >= 0;
@@ -543,6 +546,28 @@ export default function OverviewTab({ analytics: a, positions, loading }: Props)
 
   return (
     <div className="space-y-5">
+
+      {/* Portfolio Health + Suggestions */}
+      {analysis && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <PortfolioHealthCard health={analysis.health} />
+          {analysis.suggestions.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-zinc-100 font-semibold text-base">
+                Suggestions
+                <span className="ml-2 text-xs text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded-full font-normal">
+                  {analysis.suggestions.length}
+                </span>
+              </h2>
+              <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
+                {analysis.suggestions.map((s, i) => (
+                  <SuggestionCard key={i} s={s} onSimulate={onOpenSimulator} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Row 1 — Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
