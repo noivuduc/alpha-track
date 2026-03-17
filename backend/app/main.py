@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database import engine, init_redis, close_redis, Base, get_cache
 from app.routers import auth, portfolio, market, admin, research, search
+from app.workers import seed_tracked_tickers_from_db, start_all_workers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log      = logging.getLogger(__name__)
@@ -30,7 +31,23 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     log.info("DB tables ready")
+
+    # Seed tracked_tickers from existing portfolio positions + watchlist
+    await seed_tracked_tickers_from_db()
+
+    # Start background workers
+    worker_tasks = start_all_workers()
+    log.info("Started %d background workers", len(worker_tasks))
+
     yield
+
+    # Graceful shutdown: cancel workers and wait for them to stop
+    for task in worker_tasks:
+        task.cancel()
+    import asyncio
+    await asyncio.gather(*worker_tasks, return_exceptions=True)
+    log.info("Background workers stopped")
+
     await close_redis()
     await engine.dispose()
     log.info("Shutdown complete")

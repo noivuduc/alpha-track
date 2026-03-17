@@ -8,7 +8,7 @@ Database: PostgreSQL 16 + TimescaleDB
                     (partitioned by time via TimescaleDB for fast range queries)
 """
 import uuid, enum
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from sqlalchemy import (
     String, Boolean, Enum, DateTime, Numeric, BigInteger,
@@ -147,6 +147,96 @@ class CachePrice(Base):
     volume:     Mapped[int|None]     = mapped_column(BigInteger)
     source:     Mapped[str]          = mapped_column(String(50), nullable=False)
     fetched_at: Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── Generic dataset cache (L2 Postgres for all expensive FD datasets) ────────
+class CacheDataset(Base):
+    """
+    Generic L2 Postgres cache for all long-lived financialdatasets.ai responses.
+
+    Key scheme  : {dataset_type}:{TICKER}  e.g. "financials_annual:MSFT"
+    dataset_type: financials_annual | financials_quarterly | financials_ttm |
+                  metrics_snapshot | metrics_hist_annual | metrics_hist_quarterly |
+                  company_facts | estimates_annual | estimates_quarterly |
+                  ownership | insider_trades | segments
+
+    TTL strategy:
+      30 days : financials, metrics history, segments   (earnings-triggered)
+       7 days : company facts, ownership                (rarely changes)
+       1 day  : estimates, insider trades, ttm metrics  (daily workers refresh)
+    """
+    __tablename__ = "cache_dataset"
+    __table_args__ = (
+        # Workers query "all expired rows of type X" and
+        # invalidation queries "all rows for ticker Y"
+        __import__("sqlalchemy").Index("ix_cache_dataset_ticker_type", "ticker", "dataset_type"),
+    )
+
+    key:          Mapped[str]      = mapped_column(String(120), primary_key=True)
+    dataset_type: Mapped[str]      = mapped_column(String(50),  nullable=False, index=True)
+    ticker:       Mapped[str]      = mapped_column(String(20),  nullable=False, index=True)
+    data:         Mapped[dict]     = mapped_column(JSONB,        nullable=False)
+    source:       Mapped[str]      = mapped_column(String(50),  nullable=False, default="financialdatasets")
+    fetched_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ── Dataset refresh state (worker idempotency guard) ─────────────────────────
+class DatasetRefreshState(Base):
+    """
+    Records when each (ticker, dataset_type) was last successfully refreshed.
+    Workers read this before deciding whether to make a paid API call.
+
+    Guard rules:
+      estimates_annual / estimates_quarterly  : skip if refreshed < 24 hr ago
+      insider_trades                          : skip if refreshed < 24 hr ago
+      financials_* / metrics_* / segments     : governed by EarningsSchedule
+    """
+    __tablename__ = "dataset_refresh_state"
+
+    ticker:            Mapped[str]      = mapped_column(String(20), primary_key=True)
+    dataset_type:      Mapped[str]      = mapped_column(String(50), primary_key=True)
+    last_refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# ── Earnings schedule (drives fundamentals refresh) ──────────────────────────
+class EarningsSchedule(Base):
+    """
+    Tracks the last known earnings date per ticker and when fundamentals
+    should next be refreshed.
+
+    Refresh logic:
+      - On earnings date change → next_refresh_due = earnings_date + 2 days
+      - Fallback: if last_fundamental_refresh > 30 days → schedule immediately
+    """
+    __tablename__ = "earnings_schedule"
+
+    ticker:                   Mapped[str]           = mapped_column(String(20), primary_key=True)
+    last_earnings_date:       Mapped[date | None]   = mapped_column(Date)
+    next_refresh_due:         Mapped[datetime|None] = mapped_column(DateTime(timezone=True), index=True)
+    last_fundamental_refresh: Mapped[datetime|None] = mapped_column(DateTime(timezone=True))
+    updated_at:               Mapped[datetime]      = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ── Tracked tickers (worker universe) ────────────────────────────────────────
+class TrackedTicker(Base):
+    """
+    Universe of tickers that background workers should monitor.
+    Populated from: portfolio positions, watchlists, research page visits.
+
+    priority: 3=portfolio (highest), 2=watchlist, 1=research
+    """
+    __tablename__ = "tracked_tickers"
+
+    ticker:       Mapped[str]      = mapped_column(String(20), primary_key=True)
+    last_accessed:Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    priority:     Mapped[int]      = mapped_column(Integer, default=1, nullable=False)
+    source:       Mapped[str]      = mapped_column(String(20), default="research", nullable=False)
+    # "portfolio" | "watchlist" | "research"
 
 
 # ── API usage log (TimescaleDB hypertable) ────────────────────────────────────

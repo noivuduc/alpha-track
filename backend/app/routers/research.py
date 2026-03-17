@@ -1,4 +1,4 @@
-"""Research router — thin HTTP layer, delegates to ResearchService."""
+"""Research router — thin HTTP layer, delegates entirely to ResearchService."""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,8 +24,7 @@ async def research_endpoint(
     news, segmented revenues, peer comparisons, earnings history, P/E history.
     Cached 1 hour in Redis.
     """
-    sym = ticker.upper().strip()
-    return await get_research(sym, force, cache)
+    return await get_research(ticker.upper().strip(), force, cache, db)
 
 
 @router.get("/{ticker}/ai-insights")
@@ -43,7 +42,6 @@ async def ai_insights_endpoint(
       alphadesk:ai_insight:{TICKER}:anthropic  — Claude Haiku
       alphadesk:ai_insight:{TICKER}:openai     — GPT-4.1 Mini
 
-    On cache miss reads the 1-hour research cache — load the research page first.
+    Requires the research page to have been loaded first (populates research cache).
     """
-    sym = ticker.upper().strip()
-    return await get_ai_insights(sym, provider, force, cache)
+    return await get_ai_insights(ticker.upper().strip(), provider, force, cache)

@@ -20,13 +20,44 @@ class Settings(BaseSettings):
     FINANCIALDATASETS_API_KEY:  str = ""
     FINANCIALDATASETS_BASE_URL: str = "https://api.financialdatasets.ai"
 
-    # Cache TTLs (seconds)
-    CACHE_PRICE_TTL:        int = 900       # 15 min  - prices change fast
-    CACHE_FUNDAMENTALS_TTL: int = 86400     # 24 hrs  - financials update quarterly
-    CACHE_EARNINGS_TTL:     int = 3600      # 1 hr    - can change on announce day
-    CACHE_INSIDER_TTL:      int = 14400     # 4 hrs
-    CACHE_PROFILE_TTL:      int = 604800    # 7 days  - company info rarely changes
+    # ── Cache TTLs (seconds) ──────────────────────────────────────────────
+    # Real-time / high-churn
+    CACHE_PRICE_TTL:          int = 900        # 15 min  — prices change fast
+    CACHE_PRICE_SNAPSHOT_TTL: int = 900        # 15 min  — FD price snapshot
+    CACHE_NEWS_TTL:           int = 900        # 15 min  — news feed
+
+    # Medium churn
+    CACHE_HISTORY_TTL:           int = 3600    # 1 hr    — price history
+    CACHE_METRICS_SNAPSHOT_TTL:  int = 3600    # 1 hr    — FD metrics snapshot
+    CACHE_EARNINGS_TTL:          int = 3600    # 1 hr    — earnings calendar
+
+    # Daily refresh
+    CACHE_FUNDAMENTALS_TTL:   int = 86400      # 24 hr   — TTM fundamentals
+    CACHE_INSIDER_TTL:        int = 86400      # 24 hr   — insider trades (was 4 hr)
+    CACHE_ESTIMATES_TTL:      int = 86400      # 24 hr   — analyst estimates
+
+    # Weekly refresh
+    CACHE_PROFILE_TTL:        int = 604800     # 7 days  — company profile
+    CACHE_COMPANY_FACTS_TTL:  int = 604800     # 7 days  — company facts
+    CACHE_OWNERSHIP_TTL:      int = 604800     # 7 days  — institutional ownership
+
+    # Earnings-triggered (30-day fallback)
+    CACHE_FINANCIALS_TTL:     int = 2592000    # 30 days — annual/quarterly statements
+    CACHE_METRICS_HISTORY_TTL:int = 2592000    # 30 days — metrics history
+    CACHE_SEGMENTS_TTL:       int = 2592000    # 30 days — segmented revenues
+
+    # Postgres L2 cache
     PG_CACHE_FUNDAMENTALS_HOURS: int = 24
+
+    # ── Earnings-triggered refresh ─────────────────────────────────────────
+    FUNDAMENTALS_REFRESH_DELAY_DAYS: int = 2   # refresh N days after earnings
+    FUNDAMENTALS_FALLBACK_TTL_DAYS:  int = 30  # max age before forced refresh
+
+    # ── Worker run intervals (seconds) ─────────────────────────────────────
+    WORKER_EARNINGS_INTERVAL:     int = 21600   # 6 hr
+    WORKER_FUNDAMENTALS_INTERVAL: int = 3600    # 1 hr
+    WORKER_ESTIMATES_INTERVAL:    int = 86400   # 24 hr
+    WORKER_INSIDER_INTERVAL:      int = 86400   # 24 hr
 
     PREFER_FREE_FOR_PRICES: bool = True     # yfinance for prices (free)
     YFINANCE_TIMEOUT:       int = 10

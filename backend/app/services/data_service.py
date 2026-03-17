@@ -1,55 +1,112 @@
 """
-Smart Data Service — The heart of AlphaDesk's cost-saving strategy.
+Smart Data Service — single gateway to all external data.
 
-Fetch strategy (cheapest to most expensive):
-  1. Redis L1 cache     → sub-ms, free
-  2. Postgres L2 cache  → ~2ms, free
-  3. yfinance           → ~200ms, free (rate limited by Yahoo)
-  4. financialdatasets  → ~300ms, PAID — only when needed
+Fetch strategy (cheapest → most expensive):
+  1. Redis L1 cache     → sub-ms, free, volatile
+  2. Postgres L2 cache  → ~2ms,   free, survives Redis restarts
+  3. yfinance           → ~200ms, free, rate-limited
+  4. financialdatasets  → ~300ms, PAID — minimised via long TTLs + worker refresh
 
-Data source mapping:
-  Prices (real-time)    → yfinance (free) with Redis TTL 15min
-  Price history         → yfinance (free) → stored in TimescaleDB
-  Fundamentals/TTM      → financialdatasets (paid) cached 24h in Redis + PG
-  SEC Filings           → financialdatasets (paid) cached 7 days
-  Insider trades        → financialdatasets (paid) cached 4h
-  Earnings estimates    → financialdatasets (paid) cached 1h
-  Company profile       → yfinance (free) cached 7 days
+L2 coverage
+-----------
+Dataset                   Redis TTL   PG TTL   PG table
+─────────────────────────────────────────────────────────
+financials annual/qtrly   30 days     30 days  cache_dataset
+financials TTM            24 hr       24 hr    cache_dataset
+metrics snapshot          1 hr        24 hr    cache_dataset
+metrics history ann/qtrly 30 days     30 days  cache_dataset
+company facts             7 days      7 days   cache_dataset
+estimates annual/qtrly    24 hr       24 hr    cache_dataset
+institutional ownership   7 days      7 days   cache_dataset
+insider trades            24 hr       24 hr    cache_dataset
+segmented revenues        30 days     30 days  cache_dataset
+── Redis-only (fast / cheap to re-fetch) ──────────────────
+prices                    15 min      —
+price snapshots           15 min      —
+price history             1 hr        —
+company profile           7 days      —
+news                      15 min      —
+earnings calendar         1 hr        —
+── Legacy (kept for portfolio/market routers) ─────────────
+fundamentals TTM (flat)   24 hr       24 hr    cache_fundamentals
+
+Concurrency note
+----------------
+All Postgres writes use isolated AsyncSessionLocal() sessions so that
+asyncio.gather() calls (e.g. 14 parallel DataService methods in the
+research endpoint) never share mutable session state.  self.db is kept
+as an optional parameter for callers that already hold a session, but it
+is NOT used internally — only the isolated sessions are.
 """
-import asyncio, json, logging, time
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 import yfinance as yf
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
 
 from app.config import get_settings
-from app.database import Cache
-from app.models import CacheFundamentals, CachePrice
+from app.database import AsyncSessionLocal, Cache
+from app.models import CacheDataset, CacheFundamentals, CachePrice
 
 log      = logging.getLogger(__name__)
 settings = get_settings()
 
-# ── Cache key helpers ────────────────────────────────────────────────────────
-def _price_key(ticker: str)        -> str: return f"price:{ticker.upper()}"
-def _fund_key(ticker: str)         -> str: return f"fundamentals:{ticker.upper()}"
-def _profile_key(ticker: str)      -> str: return f"profile:{ticker.upper()}"
-def _history_key(t, period, iv)    -> str: return f"history:{t.upper()}:{period}:{iv}"
-def _insider_key(ticker: str)      -> str: return f"insider:{ticker.upper()}"
-def _earnings_key(ticker: str)     -> str: return f"earnings:{ticker.upper()}"
+# ── Postgres TTL per dataset type (seconds) ───────────────────────────────────
+_PG_TTL: dict[str, int] = {
+    "financials_annual":        30 * 86400,   # 30 days
+    "financials_quarterly":     30 * 86400,   # 30 days
+    "financials_ttm":               86400,    # 24 hr
+    "metrics_snapshot":             86400,    # 24 hr  (more volatile than history)
+    "metrics_hist_annual":      30 * 86400,   # 30 days
+    "metrics_hist_quarterly":   30 * 86400,   # 30 days
+    "company_facts":             7 * 86400,   # 7 days
+    "estimates_annual":             86400,    # 24 hr
+    "estimates_quarterly":          86400,    # 24 hr
+    "ownership":                 7 * 86400,   # 7 days
+    "insider_trades":               86400,    # 24 hr
+    "segments":                 30 * 86400,   # 30 days
+}
+
+# ── Redis cache key helpers ───────────────────────────────────────────────────
+def _price_key(ticker: str)         -> str: return f"price:{ticker.upper()}"
+def _price_snap_key(ticker: str)    -> str: return f"price_snapshot:{ticker.upper()}"
+def _fund_key(ticker: str)          -> str: return f"fundamentals:{ticker.upper()}"
+def _profile_key(ticker: str)       -> str: return f"profile:{ticker.upper()}"
+def _history_key(t, period, iv)     -> str: return f"history:{t.upper()}:{period}:{iv}"
+def _insider_key(ticker: str)       -> str: return f"insider:{ticker.upper()}"
+def _earnings_key(ticker: str)      -> str: return f"earnings:{ticker.upper()}"
+def _facts_key(ticker: str)         -> str: return f"facts:{ticker.upper()}"
+def _metrics_snap_key(ticker: str)  -> str: return f"metrics_snapshot:{ticker.upper()}"
+def _fin_annual_key(ticker: str)    -> str: return f"financials_annual:{ticker.upper()}"
+def _fin_quarterly_key(ticker: str) -> str: return f"financials_quarterly:{ticker.upper()}"
+def _fin_ttm_key(ticker: str)       -> str: return f"financials_ttm:{ticker.upper()}"
+def _mh_annual_key(ticker: str)     -> str: return f"metrics_hist_annual:{ticker.upper()}"
+def _mh_quarterly_key(ticker: str)  -> str: return f"metrics_hist_quarterly:{ticker.upper()}"
+def _ownership_key(ticker: str)     -> str: return f"ownership:{ticker.upper()}"
+def _est_annual_key(ticker: str)    -> str: return f"estimates_annual:{ticker.upper()}"
+def _est_quarterly_key(ticker: str) -> str: return f"estimates_quarterly:{ticker.upper()}"
+def _segments_key(ticker: str)      -> str: return f"segments:{ticker.upper()}"
 
 
 class DataService:
     """
-    All external data access goes through this class.
-    Never call yfinance or financialdatasets directly from routers.
+    Single gateway to all external data.
+    Routers and services NEVER call yfinance or financialdatasets directly.
     """
 
-    def __init__(self, cache: Cache, db: AsyncSession):
+    def __init__(self, cache: Cache, db: AsyncSession | None = None):
         self.cache = cache
-        self.db    = db
+        self.db    = db          # kept for API compatibility; not used for PG writes
         self._fd_client = httpx.AsyncClient(
             base_url=settings.FINANCIALDATASETS_BASE_URL,
             headers={"X-API-KEY": settings.FINANCIALDATASETS_API_KEY},
@@ -60,64 +117,173 @@ class DataService:
     async def aclose(self):
         await self._fd_client.aclose()
 
-    # ════════════════════════════════════════════════════════════════
-    # PRICES  (yfinance free, Redis TTL 15min)
-    # ════════════════════════════════════════════════════════════════
+    async def __aenter__(self): return self
+    async def __aexit__(self, *_): await self.aclose()
+
+    # ── FD HTTP helper ────────────────────────────────────────────────────────
+    async def _fd(self, path: str, params: dict) -> dict:
+        """Safe FD GET — never raises, returns {} on error, logs latency."""
+        t0 = time.perf_counter()
+        try:
+            r  = await self._fd_client.get(path, params=params)
+            ms = int((time.perf_counter() - t0) * 1000)
+            if r.status_code == 200:
+                log.debug("FD %s %s → 200 (%dms)", path, params, ms)
+                return r.json()
+            log.warning("FD %s %s → HTTP %s (%dms): %s",
+                        path, params, r.status_code, ms, r.text[:120])
+            return {}
+        except Exception as e:
+            log.error("FD fetch error %s %s: %s", path, params, e)
+            return {}
+
+    # ════════════════════════════════════════════════════════════════════
+    # GENERIC L2 HELPERS  (each uses its own isolated session)
+    # ════════════════════════════════════════════════════════════════════
+
+    async def _get_pg_dataset(self, key: str) -> dict | None:
+        """
+        Check Postgres L2 cache for *key*.
+        Uses an isolated session — safe to call from asyncio.gather().
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(CacheDataset).where(
+                        CacheDataset.key        == key,
+                        CacheDataset.expires_at >  now,
+                    )
+                )
+                row = result.scalar_one_or_none()
+                return row.data if row else None
+        except Exception as e:
+            log.warning("PG read error for key=%s: %s", key, e)
+            return None
+
+    async def _upsert_pg_dataset(
+        self,
+        key:          str,
+        dataset_type: str,
+        ticker:       str,
+        data:         dict,
+        pg_ttl:       int,
+    ) -> None:
+        """
+        Atomic upsert to Postgres L2 cache using INSERT … ON CONFLICT DO UPDATE.
+        Uses its own isolated session — safe to call from asyncio.gather().
+        """
+        try:
+            now     = datetime.now(timezone.utc)
+            expires = now + timedelta(seconds=pg_ttl)
+            stmt = (
+                pg_insert(CacheDataset)
+                .values(
+                    key=key, dataset_type=dataset_type,
+                    ticker=ticker.upper(), data=data,
+                    source="financialdatasets",
+                    fetched_at=now, expires_at=expires,
+                )
+                .on_conflict_do_update(
+                    index_elements=["key"],
+                    set_={"data": data, "fetched_at": now, "expires_at": expires},
+                )
+            )
+            async with AsyncSessionLocal() as db:
+                async with db.begin():
+                    await db.execute(stmt)
+            log.debug("PG upsert: %s %s", dataset_type, ticker.upper())
+        except Exception as e:
+            log.error("PG upsert error %s %s: %s", dataset_type, ticker, e)
+
+    async def _get_cached(
+        self,
+        key:          str,
+        dataset_type: str,
+        ticker:       str,
+        redis_ttl:    int,
+        pg_ttl:       int,
+        force:        bool,
+        fetch_fn:     Callable[[], Awaitable[dict]],
+    ) -> dict:
+        """
+        Generic L1 → L2 → API fetch with full logging.
+
+        L1 (Redis) hit  → return immediately
+        L2 (PG) hit     → repopulate Redis, return
+        API call        → write Redis + PG, return
+
+        When force=True: skip L1+L2 reads, always call API and overwrite caches.
+        """
+        sym = ticker.upper()
+
+        if not force:
+            # ── L1: Redis ──────────────────────────────────────────────────
+            cached = await self.cache.get(key)
+            if cached:
+                return json.loads(cached)
+
+            # ── L2: Postgres ────────────────────────────────────────────────
+            pg_data = await self._get_pg_dataset(key)
+            if pg_data:
+                log.info("PG cache hit: %s %s", dataset_type, sym)
+                await self.cache.set(key, json.dumps(pg_data), redis_ttl)
+                return pg_data
+
+            log.info("PG miss → API call: %s %s", dataset_type, sym)
+        else:
+            log.info("PAID API CALL: %s for %s (force_refresh)", dataset_type, sym)
+
+        # ── L3: External API ────────────────────────────────────────────────
+        raw = await fetch_fn()
+        if raw:
+            await self.cache.set(key, json.dumps(raw), redis_ttl)
+            await self._upsert_pg_dataset(key, dataset_type, sym, raw, pg_ttl)
+        return raw
+
+    # ════════════════════════════════════════════════════════════════════
+    # PRICES  (yfinance free, Redis 15 min — no PG)
+    # ════════════════════════════════════════════════════════════════════
     async def get_price(self, ticker: str) -> dict[str, Any]:
         key = _price_key(ticker)
-
-        # L1: Redis — skip cache if price is zero (stale bad entry)
         cached = await self.cache.get(key)
         if cached:
             data = json.loads(cached)
             if data.get("price", 0) > 0:
                 data["_source"] = "cache_redis"
                 return data
-            # Zero cached price: fall through to live fetch
             await self.cache.delete(key)
 
-        # Fetch from yfinance (free)
         data = await self._fetch_price_yfinance(ticker)
         data["_source"] = "yfinance"
-
-        # Store in L1 (Redis) — never cache a zero price (failed fetch)
         if data.get("price", 0) > 0:
             await self.cache.set(key, json.dumps(data), settings.CACHE_PRICE_TTL)
         return data
 
     async def get_prices_bulk(self, tickers: list[str]) -> dict[str, dict]:
-        """Batch price fetch — minimises yfinance calls."""
-        results = {}
-        missing = []
-
+        results, missing = {}, []
         for t in tickers:
             cached = await self.cache.get(_price_key(t))
             if cached:
                 data = json.loads(cached)
                 if data.get("price", 0) > 0:
-                    results[t] = data
-                    results[t]["_source"] = "cache_redis"
+                    results[t] = {**data, "_source": "cache_redis"}
                     continue
-                # Zero cached price: treat as missing, delete stale entry
                 await self.cache.delete(_price_key(t))
             missing.append(t)
 
         if missing:
-            fetched = await self._fetch_prices_bulk_yfinance(missing)
-            for ticker, data in fetched.items():
+            for ticker, data in (await self._fetch_prices_bulk_yfinance(missing)).items():
                 data["_source"] = "yfinance"
                 results[ticker] = data
-                # Never cache a zero price (failed yfinance fetch)
                 if data.get("price", 0) > 0:
                     await self.cache.set(_price_key(ticker), json.dumps(data), settings.CACHE_PRICE_TTL)
-
         return results
 
     async def _fetch_price_yfinance(self, ticker: str) -> dict:
         loop = asyncio.get_event_loop()
         def _sync():
-            t = yf.Ticker(ticker)
-            info = t.fast_info
+            info = yf.Ticker(ticker).fast_info
             return {
                 "ticker":     ticker.upper(),
                 "price":      float(info.last_price or 0),
@@ -133,330 +299,502 @@ class DataService:
         loop = asyncio.get_event_loop()
         def _sync():
             import pandas as pd
-            symbols = " ".join(tickers)
-            data = yf.download(symbols, period="2d", auto_adjust=True, progress=False)
-            results = {}
-            now = datetime.now(timezone.utc).isoformat()
+            data = yf.download(" ".join(tickers), period="2d", auto_adjust=True, progress=False)
+            now  = datetime.now(timezone.utc).isoformat()
+            out: dict = {}
             for t in tickers:
                 try:
-                    close_col = ("Close", t) if isinstance(data.columns, pd.MultiIndex) else "Close"
-                    prices = data[close_col].dropna()
+                    col    = ("Close", t) if isinstance(data.columns, pd.MultiIndex) else "Close"
+                    prices = data[col].dropna()
                     if len(prices) >= 2:
                         curr, prev = float(prices.iloc[-1]), float(prices.iloc[-2])
-                        results[t] = {
-                            "ticker": t, "price": curr,
-                            "change": curr - prev,
-                            "change_pct": (curr - prev) / prev * 100,
-                            "fetched_at": now,
-                        }
+                        out[t] = {"ticker": t, "price": curr,
+                                  "change": curr - prev,
+                                  "change_pct": (curr - prev) / prev * 100,
+                                  "fetched_at": now}
                     else:
-                        results[t] = {"ticker": t, "price": 0, "change": 0, "change_pct": 0, "fetched_at": now}
+                        out[t] = {"ticker": t, "price": 0, "change": 0, "change_pct": 0, "fetched_at": now}
                 except Exception as e:
-                    log.warning(f"yfinance bulk price error for {t}: {e}")
-                    results[t] = {"ticker": t, "price": 0, "error": str(e), "fetched_at": now}
-            return results
+                    log.warning("yfinance bulk price error %s: %s", t, e)
+                    out[t] = {"ticker": t, "price": 0, "error": str(e), "fetched_at": now}
+            return out
         return await loop.run_in_executor(None, _sync)
 
-    # ════════════════════════════════════════════════════════════════
-    # FUNDAMENTALS  (financialdatasets PAID — aggressive caching)
-    # ════════════════════════════════════════════════════════════════
-    async def get_fundamentals(self, ticker: str, force_refresh: bool = False) -> dict[str, Any]:
-        key = _fund_key(ticker)
-
-        if not force_refresh:
-            # L1: Redis
-            cached = await self.cache.get(key)
-            if cached:
-                data = json.loads(cached)
-                data["_source"] = "cache_redis"
-                return data
-
-            # L2: Postgres (survives Redis restarts)
-            pg_cached = await self._get_pg_fundamentals(ticker)
-            if pg_cached:
-                # Repopulate Redis from PG
-                await self.cache.set(key, json.dumps(pg_cached), settings.CACHE_FUNDAMENTALS_TTL)
-                pg_cached["_source"] = "cache_pg"
-                return pg_cached
-
-        # L3: financialdatasets.ai (PAID — billed per call)
-        log.info(f"PAID API CALL: financialdatasets fundamentals for {ticker}")
-        data = await self._fetch_fundamentals_fd(ticker)
-
-        if "error" not in data:
-            # Enrich with yfinance free data (ratios, margins)
-            yf_data = await self._fetch_profile_yfinance(ticker)
-            data["yf_enrichment"] = yf_data
-
-            now = datetime.now(timezone.utc)
-            data["fetched_at"] = now.isoformat()
-
-            # Store in both caches
-            await self.cache.set(key, json.dumps(data), settings.CACHE_FUNDAMENTALS_TTL)
-            await self._upsert_pg_fundamentals(ticker, data)
-
-        data["_source"] = "financialdatasets"
-        return data
-
-    async def _fetch_fundamentals_fd(self, ticker: str) -> dict:
-        """Call financialdatasets.ai for income statement + cash flow."""
-        try:
-            # Fetch both in parallel to minimise latency
-            income_task = self._fd_client.get(
-                "/financials/income-statements",
-                params={"ticker": ticker, "period": "ttm", "limit": 1}
-            )
-            cashflow_task = self._fd_client.get(
-                "/financials/cash-flow-statements",
-                params={"ticker": ticker, "period": "ttm", "limit": 1}
-            )
-            balance_task = self._fd_client.get(
-                "/financials/balance-sheets",
-                params={"ticker": ticker, "period": "ttm", "limit": 1}
-            )
-            income_r, cashflow_r, balance_r = await asyncio.gather(
-                income_task, cashflow_task, balance_task
-            )
-
-            for label, r in [("income", income_r), ("cashflow", cashflow_r), ("balance", balance_r)]:
-                if r.status_code not in (200, 201):
-                    log.error("financialdatasets %s HTTP %s: %s", label, r.status_code, r.text[:200])
-                    raise ValueError(f"financialdatasets {label} returned HTTP {r.status_code}: {r.text[:200]}")
-
-            income   = income_r.json().get("income_statements", [{}])[0]
-            cashflow = cashflow_r.json().get("cash_flow_statements", [{}])[0]
-            balance  = balance_r.json().get("balance_sheets", [{}])[0]
-
-            revenue  = income.get("revenue", 1) or 1
-            net_inc  = income.get("net_income", 0) or 0
-            ebit     = income.get("operating_income", 0) or 0
-            ebitda   = income.get("ebitda", 0) or 0
-            fcf      = cashflow.get("free_cash_flow", 0) or 0
-
-            return {
-                "ticker":          ticker.upper(),
-                "revenue":         revenue,
-                "net_income":      net_inc,
-                "ebit":            ebit,
-                "ebitda":          ebitda,
-                "free_cash_flow":  fcf,
-                "ni_margin":       round(net_inc / revenue * 100, 2),
-                "ebit_margin":     round(ebit    / revenue * 100, 2),
-                "ebitda_margin":   round(ebitda  / revenue * 100, 2),
-                "fcf_margin":      round(fcf     / revenue * 100, 2),
-                "total_assets":    balance.get("total_assets"),
-                "total_debt":      balance.get("total_debt"),
-                "cash":            balance.get("cash_and_equivalents"),
-                "raw_income":      income,
-                "raw_cashflow":    cashflow,
-                "raw_balance":     balance,
-            }
-        except Exception as e:
-            log.error(f"financialdatasets API error for {ticker}: {e}")
-            return {"ticker": ticker, "error": str(e)}
-
-    async def _get_pg_fundamentals(self, ticker: str) -> dict | None:
-        now = datetime.now(timezone.utc)
-        result = await self.db.execute(
-            select(CacheFundamentals).where(
-                CacheFundamentals.ticker == ticker.upper(),
-                CacheFundamentals.expires_at > now
-            )
-        )
-        row = result.scalar_one_or_none()
-        return row.data if row else None
-
-    async def _upsert_pg_fundamentals(self, ticker: str, data: dict):
-        now     = datetime.now(timezone.utc)
-        expires = now + timedelta(hours=settings.PG_CACHE_FUNDAMENTALS_HOURS)
-        existing = await self.db.get(CacheFundamentals, ticker.upper())
-        if existing:
-            existing.data       = data
-            existing.source     = "financialdatasets"
-            existing.fetched_at = now
-            existing.expires_at = expires
-        else:
-            self.db.add(CacheFundamentals(
-                ticker=ticker.upper(), source="financialdatasets",
-                data=data, fetched_at=now, expires_at=expires
-            ))
-        await self.db.flush()
-
-    # ════════════════════════════════════════════════════════════════
-    # PRICE HISTORY  (yfinance free → stored in TimescaleDB)
-    # ════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════
+    # PRICE HISTORY  (yfinance free, Redis 1 hr — no PG)
+    # ════════════════════════════════════════════════════════════════════
     async def get_price_history(self, ticker: str, period: str = "1y", interval: str = "1d") -> list[dict]:
-        key = _history_key(ticker, period, interval)
+        key    = _history_key(ticker, period, interval)
         cached = await self.cache.get(key)
         if cached:
             return json.loads(cached)
 
         loop = asyncio.get_event_loop()
         def _sync():
-            t = yf.Ticker(ticker)
-            hist = t.history(period=period, interval=interval, auto_adjust=True)
-            records = []
-            for ts, row in hist.iterrows():
-                records.append({
-                    "ts":     ts.isoformat(),
-                    "open":   round(float(row["Open"]),  4),
-                    "high":   round(float(row["High"]),  4),
-                    "low":    round(float(row["Low"]),   4),
-                    "close":  round(float(row["Close"]), 4),
-                    "volume": int(row["Volume"]),
-                })
-            return records
+            hist = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
+            return [{"ts": ts.isoformat(),
+                     "open":   round(float(r["Open"]),  4),
+                     "high":   round(float(r["High"]),  4),
+                     "low":    round(float(r["Low"]),   4),
+                     "close":  round(float(r["Close"]), 4),
+                     "volume": int(r["Volume"])}
+                    for ts, r in hist.iterrows()]
 
         records = await loop.run_in_executor(None, _sync)
-        # Cache for 1h for daily, 15min for intraday
-        ttl = 900 if interval in ("1m","5m","15m","1h") else 3600
+        ttl = 900 if interval in ("1m", "5m", "15m", "1h") else settings.CACHE_HISTORY_TTL
         await self.cache.set(key, json.dumps(records), ttl)
         return records
 
-    # ════════════════════════════════════════════════════════════════
-    # COMPANY PROFILE  (yfinance free, 7-day cache)
-    # ════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════
+    # COMPANY PROFILE  (yfinance free, Redis 7 days — no PG)
+    # ════════════════════════════════════════════════════════════════════
     async def get_profile(self, ticker: str) -> dict:
-        key = _profile_key(ticker)
+        key    = _profile_key(ticker)
         cached = await self.cache.get(key)
         if cached:
-            data = json.loads(cached)
-            data["_source"] = "cache_redis"
-            return data
+            return {**json.loads(cached), "_source": "cache_redis"}
 
         data = await self._fetch_profile_yfinance(ticker)
         await self.cache.set(key, json.dumps(data), settings.CACHE_PROFILE_TTL)
-        data["_source"] = "yfinance"
-        return data
+        return {**data, "_source": "yfinance"}
 
     async def _fetch_profile_yfinance(self, ticker: str) -> dict:
         loop = asyncio.get_event_loop()
         def _sync():
-            t = yf.Ticker(ticker)
-            i = t.info
+            i = yf.Ticker(ticker).info
             return {
-                "ticker":      ticker.upper(),
-                "name":        i.get("longName", ""),
-                "sector":      i.get("sector", ""),
-                "industry":    i.get("industry", ""),
+                "ticker": ticker.upper(), "name": i.get("longName", ""),
+                "sector": i.get("sector", ""), "industry": i.get("industry", ""),
                 "description": i.get("longBusinessSummary", ""),
-                "website":     i.get("website", ""),
-                "employees":   i.get("fullTimeEmployees"),
-                "country":     i.get("country", ""),
-                "pe_ratio":    i.get("trailingPE"),
-                "fwd_pe":      i.get("forwardPE"),
-                "pb_ratio":    i.get("priceToBook"),
-                "dividend_yield": i.get("dividendYield"),
-                "beta":        i.get("beta"),
-                "52w_high":    i.get("fiftyTwoWeekHigh"),
-                "52w_low":     i.get("fiftyTwoWeekLow"),
-                "avg_volume":  i.get("averageVolume"),
+                "website": i.get("website", ""), "employees": i.get("fullTimeEmployees"),
+                "country": i.get("country", ""), "pe_ratio": i.get("trailingPE"),
+                "fwd_pe": i.get("forwardPE"), "pb_ratio": i.get("priceToBook"),
+                "dividend_yield": i.get("dividendYield"), "beta": i.get("beta"),
+                "52w_high": i.get("fiftyTwoWeekHigh"), "52w_low": i.get("fiftyTwoWeekLow"),
+                "avg_volume": i.get("averageVolume"),
             }
         return await loop.run_in_executor(None, _sync)
 
-    # ════════════════════════════════════════════════════════════════
-    # INSIDER TRADES  (financialdatasets PAID, 4h cache)
-    # ════════════════════════════════════════════════════════════════
-    async def get_insider_trades(self, ticker: str) -> list[dict]:
-        key = _insider_key(ticker)
-        cached = await self.cache.get(key)
-        if cached:
-            return json.loads(cached)
+    # ════════════════════════════════════════════════════════════════════
+    # PRICE SNAPSHOT  (FD, Redis 15 min — no PG; cheap to re-fetch)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_price_snapshot(self, ticker: str, force: bool = False) -> dict:
+        key = _price_snap_key(ticker)
+        if not force:
+            cached = await self.cache.get(key)
+            if cached:
+                return json.loads(cached)
+        raw = await self._fd("/prices/snapshot/", {"ticker": ticker})
+        if raw:
+            await self.cache.set(key, json.dumps(raw), settings.CACHE_PRICE_SNAPSHOT_TTL)
+        return raw
 
-        log.info(f"PAID API CALL: financialdatasets insider trades for {ticker}")
-        try:
-            r = await self._fd_client.get(
-                "/insider-trades",
-                params={"ticker": ticker, "limit": 20}
-            )
-            trades = r.json().get("insider_trades", [])
-        except Exception as e:
-            log.error(f"Insider trades error {ticker}: {e}")
-            trades = []
-
-        await self.cache.set(key, json.dumps(trades), settings.CACHE_INSIDER_TTL)
-        return trades
-
-    # ════════════════════════════════════════════════════════════════
-    # EARNINGS  (financialdatasets PAID, 1h cache)
-    # ════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════
+    # EARNINGS CALENDAR  (FD, Redis 1 hr — no PG; cheap to re-fetch)
+    # ════════════════════════════════════════════════════════════════════
     async def get_earnings(self, ticker: str) -> dict:
-        key = _earnings_key(ticker)
+        key    = _earnings_key(ticker)
         cached = await self.cache.get(key)
         if cached:
             return json.loads(cached)
-
-        log.info(f"PAID API CALL: financialdatasets earnings for {ticker}")
+        log.info("PAID API CALL: earnings calendar for %s", ticker)
         try:
-            r = await self._fd_client.get(
-                "/earnings",
-                params={"ticker": ticker, "limit": 8}
-            )
-            data = r.json()
+            r    = await self._fd_client.get("/earnings/", params={"ticker": ticker, "limit": 8})
+            data = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
         except Exception as e:
-            log.error(f"Earnings error {ticker}: {e}")
+            log.error("Earnings error %s: %s", ticker, e)
             data = {"error": str(e)}
-
         await self.cache.set(key, json.dumps(data), settings.CACHE_EARNINGS_TTL)
         return data
 
-    # ════════════════════════════════════════════════════════════════
-    # NEWS  (yfinance free, 15-minute cache per ticker)
-    # ════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════
+    # NEWS  (yfinance free, Redis 15 min — no PG)
+    # ════════════════════════════════════════════════════════════════════
     async def get_news(self, ticker: str) -> list[dict]:
-        """Fetch recent news for a ticker via yfinance. Cached 15 minutes."""
-        key = f"news:{ticker.upper()}"
+        key    = f"news:{ticker.upper()}"
         cached = await self.cache.get(key)
         if cached:
             return json.loads(cached)
 
         loop = asyncio.get_event_loop()
         def _sync():
-            t        = yf.Ticker(ticker)
-            raw_news = t.news or []
+            raw_news = yf.Ticker(ticker).news or []
             result   = []
             for item in raw_news[:15]:
-                content = item.get("content") or {}
+                content  = item.get("content") or {}
                 if content:
-                    # yfinance ≥1.2 nested format
                     title    = content.get("title", "")
                     provider = (content.get("provider") or {}).get("displayName", "")
                     url_obj  = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
                     url      = url_obj.get("url", "")
                     pub_date = (content.get("pubDate") or "")[:10]
                 else:
-                    # Legacy flat format
                     title    = item.get("title", "")
                     provider = item.get("publisher", "")
                     url      = item.get("link", "")
                     ts       = item.get("providerPublishTime", 0)
-                    pub_date = (
-                        datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                        if ts else ""
-                    )
+                    pub_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") if ts else ""
                 if title:
-                    result.append({
-                        "ticker":   ticker.upper(),
-                        "headline": title,
-                        "source":   provider,
-                        "url":      url,
-                        "date":     pub_date,
-                    })
+                    result.append({"ticker": ticker.upper(), "headline": title,
+                                   "source": provider, "url": url, "date": pub_date})
             return result
 
         news = await loop.run_in_executor(None, _sync)
-        await self.cache.set(key, json.dumps(news), 900)   # 15 min
+        await self.cache.set(key, json.dumps(news), settings.CACHE_NEWS_TTL)
         return news
 
-    # ════════════════════════════════════════════════════════════════
-    # CACHE MANAGEMENT
-    # ════════════════════════════════════════════════════════════════
-    async def invalidate(self, ticker: str):
-        """Force-expire all cached data for a ticker."""
-        for key in [_price_key(ticker), _fund_key(ticker), _profile_key(ticker),
-                    _insider_key(ticker), _earnings_key(ticker)]:
-            await self.cache.delete(key)
-        await self.db.execute(
-            delete(CacheFundamentals).where(CacheFundamentals.ticker == ticker.upper())
+    # ════════════════════════════════════════════════════════════════════
+    # TTM FUNDAMENTALS  (FD, Redis 24 hr + Postgres cache_fundamentals)
+    # Legacy method — kept for portfolio/market routers. Uses the old
+    # cache_fundamentals table (not the new generic cache_dataset).
+    # ════════════════════════════════════════════════════════════════════
+    async def get_fundamentals(self, ticker: str, force_refresh: bool = False) -> dict[str, Any]:
+        key = _fund_key(ticker)
+
+        if not force_refresh:
+            cached = await self.cache.get(key)
+            if cached:
+                return {**json.loads(cached), "_source": "cache_redis"}
+
+            pg_cached = await self._get_pg_fundamentals(ticker)
+            if pg_cached:
+                log.info("PG cache hit: fundamentals %s", ticker.upper())
+                await self.cache.set(key, json.dumps(pg_cached), settings.CACHE_FUNDAMENTALS_TTL)
+                return {**pg_cached, "_source": "cache_pg"}
+
+        log.info("PAID API CALL: TTM fundamentals for %s (force=%s)", ticker, force_refresh)
+        data = await self._fetch_fundamentals_fd(ticker)
+
+        if "error" not in data:
+            data["yf_enrichment"] = await self._fetch_profile_yfinance(ticker)
+            data["fetched_at"]    = datetime.now(timezone.utc).isoformat()
+            await self.cache.set(key, json.dumps(data), settings.CACHE_FUNDAMENTALS_TTL)
+            await self._upsert_pg_fundamentals(ticker, data)
+
+        return {**data, "_source": "financialdatasets"}
+
+    async def _fetch_fundamentals_fd(self, ticker: str) -> dict:
+        try:
+            inc_r, cf_r, bal_r = await asyncio.gather(
+                self._fd_client.get("/financials/income-statements/",   {"ticker": ticker, "period": "ttm", "limit": 1}),
+                self._fd_client.get("/financials/cash-flow-statements/",{"ticker": ticker, "period": "ttm", "limit": 1}),
+                self._fd_client.get("/financials/balance-sheets/",      {"ticker": ticker, "period": "ttm", "limit": 1}),
+            )
+            for label, r in [("income", inc_r), ("cashflow", cf_r), ("balance", bal_r)]:
+                if r.status_code not in (200, 201):
+                    raise ValueError(f"FD {label} HTTP {r.status_code}")
+
+            income   = inc_r.json().get("income_statements",    [{}])[0]
+            cashflow = cf_r.json().get("cash_flow_statements",  [{}])[0]
+            balance  = bal_r.json().get("balance_sheets",       [{}])[0]
+            rev      = income.get("revenue", 1) or 1
+            net_inc  = income.get("net_income", 0) or 0
+            ebit     = income.get("operating_income", 0) or 0
+            ebitda   = income.get("ebitda", 0) or 0
+            fcf      = cashflow.get("free_cash_flow", 0) or 0
+            return {
+                "ticker": ticker.upper(), "revenue": rev, "net_income": net_inc,
+                "ebit": ebit, "ebitda": ebitda, "free_cash_flow": fcf,
+                "ni_margin":    round(net_inc / rev * 100, 2),
+                "ebit_margin":  round(ebit    / rev * 100, 2),
+                "ebitda_margin":round(ebitda  / rev * 100, 2),
+                "fcf_margin":   round(fcf     / rev * 100, 2),
+                "total_assets": balance.get("total_assets"),
+                "total_debt":   balance.get("total_debt"),
+                "cash":         balance.get("cash_and_equivalents"),
+                "raw_income":   income, "raw_cashflow": cashflow, "raw_balance": balance,
+            }
+        except Exception as e:
+            log.error("fundamentals FD error for %s: %s", ticker, e)
+            return {"ticker": ticker, "error": str(e)}
+
+    async def _get_pg_fundamentals(self, ticker: str) -> dict | None:
+        """Isolated-session read from cache_fundamentals."""
+        try:
+            now = datetime.now(timezone.utc)
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(CacheFundamentals).where(
+                        CacheFundamentals.ticker    == ticker.upper(),
+                        CacheFundamentals.expires_at > now,
+                    )
+                )
+                row = result.scalar_one_or_none()
+                return row.data if row else None
+        except Exception as e:
+            log.warning("PG read error fundamentals %s: %s", ticker, e)
+            return None
+
+    async def _upsert_pg_fundamentals(self, ticker: str, data: dict) -> None:
+        """Atomic upsert to cache_fundamentals using an isolated session."""
+        try:
+            now     = datetime.now(timezone.utc)
+            expires = now + timedelta(hours=settings.PG_CACHE_FUNDAMENTALS_HOURS)
+            stmt = (
+                pg_insert(CacheFundamentals)
+                .values(
+                    ticker=ticker.upper(), source="financialdatasets",
+                    data=data, period="ttm",
+                    fetched_at=now, expires_at=expires,
+                )
+                .on_conflict_do_update(
+                    index_elements=["ticker"],
+                    set_={"data": data, "source": "financialdatasets",
+                          "fetched_at": now, "expires_at": expires},
+                )
+            )
+            async with AsyncSessionLocal() as db:
+                async with db.begin():
+                    await db.execute(stmt)
+        except Exception as e:
+            log.error("PG upsert error fundamentals %s: %s", ticker, e)
+
+    # ════════════════════════════════════════════════════════════════════
+    # COMPANY FACTS  (FD, Redis 7d + PG 7d)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_company_facts(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _facts_key(ticker),
+            dataset_type = "company_facts",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_COMPANY_FACTS_TTL,
+            pg_ttl       = _PG_TTL["company_facts"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/company/facts/", {"ticker": ticker}),
         )
-        log.info(f"Cache invalidated for {ticker}")
+
+    # ════════════════════════════════════════════════════════════════════
+    # METRICS SNAPSHOT  (FD, Redis 1hr + PG 24hr)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_metrics_snapshot(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _metrics_snap_key(ticker),
+            dataset_type = "metrics_snapshot",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_METRICS_SNAPSHOT_TTL,
+            pg_ttl       = _PG_TTL["metrics_snapshot"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/financial-metrics/snapshot/", {"ticker": ticker}),
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # FINANCIALS  (FD, Redis 30d + PG 30d for annual/quarterly;
+    #              Redis 24hr + PG 24hr for TTM)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_financials_annual(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _fin_annual_key(ticker),
+            dataset_type = "financials_annual",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_FINANCIALS_TTL,
+            pg_ttl       = _PG_TTL["financials_annual"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/financials/",
+                                            {"ticker": ticker, "period": "annual", "limit": 10}),
+        )
+
+    async def get_financials_quarterly(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _fin_quarterly_key(ticker),
+            dataset_type = "financials_quarterly",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_FINANCIALS_TTL,
+            pg_ttl       = _PG_TTL["financials_quarterly"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/financials/",
+                                            {"ticker": ticker, "period": "quarterly", "limit": 20}),
+        )
+
+    async def get_financials_ttm(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _fin_ttm_key(ticker),
+            dataset_type = "financials_ttm",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_FUNDAMENTALS_TTL,
+            pg_ttl       = _PG_TTL["financials_ttm"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/financials/",
+                                            {"ticker": ticker, "period": "ttm", "limit": 1}),
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # METRICS HISTORY  (FD, Redis 30d + PG 30d)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_metrics_history_annual(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _mh_annual_key(ticker),
+            dataset_type = "metrics_hist_annual",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_METRICS_HISTORY_TTL,
+            pg_ttl       = _PG_TTL["metrics_hist_annual"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/financial-metrics/",
+                                            {"ticker": ticker, "period": "annual", "limit": 10}),
+        )
+
+    async def get_metrics_history_quarterly(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _mh_quarterly_key(ticker),
+            dataset_type = "metrics_hist_quarterly",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_METRICS_HISTORY_TTL,
+            pg_ttl       = _PG_TTL["metrics_hist_quarterly"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/financial-metrics/",
+                                            {"ticker": ticker, "period": "quarterly", "limit": 20}),
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # INSTITUTIONAL OWNERSHIP  (FD, Redis 7d + PG 7d)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_institutional_ownership(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _ownership_key(ticker),
+            dataset_type = "ownership",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_OWNERSHIP_TTL,
+            pg_ttl       = _PG_TTL["ownership"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/institutional-ownership/",
+                                            {"ticker": ticker, "limit": 15}),
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # ANALYST ESTIMATES  (FD, Redis 24hr + PG 24hr)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_analyst_estimates_annual(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _est_annual_key(ticker),
+            dataset_type = "estimates_annual",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_ESTIMATES_TTL,
+            pg_ttl       = _PG_TTL["estimates_annual"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/analyst-estimates/",
+                                            {"ticker": ticker, "period": "annual"}),
+        )
+
+    async def get_analyst_estimates_quarterly(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _est_quarterly_key(ticker),
+            dataset_type = "estimates_quarterly",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_ESTIMATES_TTL,
+            pg_ttl       = _PG_TTL["estimates_quarterly"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/analyst-estimates/",
+                                            {"ticker": ticker, "period": "quarterly"}),
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # INSIDER TRADES  (FD, Redis 24hr + PG 24hr)
+    # Returns list[dict] — wraps/unwraps {"insider_trades": [...]} in PG.
+    # ════════════════════════════════════════════════════════════════════
+    async def get_insider_trades(self, ticker: str, force: bool = False) -> list[dict]:
+        key = _insider_key(ticker)
+        sym = ticker.upper()
+
+        if not force:
+            # L1: Redis
+            cached = await self.cache.get(key)
+            if cached:
+                return json.loads(cached)
+
+            # L2: Postgres (stored as {"insider_trades": [...]})
+            pg_data = await self._get_pg_dataset(key)
+            if pg_data:
+                log.info("PG cache hit: insider_trades %s", sym)
+                trades = pg_data.get("insider_trades", [])
+                await self.cache.set(key, json.dumps(trades), settings.CACHE_INSIDER_TTL)
+                return trades
+
+            log.info("PG miss → API call: insider_trades %s", sym)
+        else:
+            log.info("PAID API CALL: insider trades for %s (force_refresh)", sym)
+
+        try:
+            r      = await self._fd_client.get("/insider-trades/",
+                                               params={"ticker": ticker, "limit": 30})
+            trades = r.json().get("insider_trades", []) if r.status_code == 200 else []
+        except Exception as e:
+            log.error("Insider trades error %s: %s", ticker, e)
+            trades = []
+
+        await self.cache.set(key, json.dumps(trades), settings.CACHE_INSIDER_TTL)
+        # Wrap in dict for generic PG storage
+        await self._upsert_pg_dataset(key, "insider_trades", sym,
+                                      {"insider_trades": trades}, _PG_TTL["insider_trades"])
+        return trades
+
+    # ════════════════════════════════════════════════════════════════════
+    # SEGMENTED REVENUES  (FD, Redis 30d + PG 30d)
+    # ════════════════════════════════════════════════════════════════════
+    async def get_segmented_revenues(self, ticker: str, force: bool = False) -> dict:
+        return await self._get_cached(
+            key          = _segments_key(ticker),
+            dataset_type = "segments",
+            ticker       = ticker,
+            redis_ttl    = settings.CACHE_SEGMENTS_TTL,
+            pg_ttl       = _PG_TTL["segments"],
+            force        = force,
+            fetch_fn     = lambda: self._fd("/financials/segmented-revenues/",
+                                            {"ticker": ticker, "period": "annual", "limit": 5}),
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # CACHE MANAGEMENT  (each uses its own isolated session)
+    # ════════════════════════════════════════════════════════════════════
+    async def invalidate_fundamentals(self, ticker: str) -> None:
+        """
+        Wipe all earnings-sensitive caches for *ticker* from both Redis and Postgres.
+        Called by fundamentals_worker after a forced refresh.
+        """
+        sym = ticker.upper()
+        redis_keys = [
+            _fund_key(sym), _fin_annual_key(sym), _fin_quarterly_key(sym),
+            _fin_ttm_key(sym), _mh_annual_key(sym), _mh_quarterly_key(sym),
+            _segments_key(sym), f"research7:{sym}",
+        ]
+        for k in redis_keys:
+            await self.cache.delete(k)
+
+        pg_types = {
+            "financials_annual", "financials_quarterly", "financials_ttm",
+            "metrics_hist_annual", "metrics_hist_quarterly", "segments",
+        }
+        try:
+            async with AsyncSessionLocal() as db:
+                async with db.begin():
+                    await db.execute(
+                        delete(CacheDataset).where(
+                            CacheDataset.ticker       == sym,
+                            CacheDataset.dataset_type.in_(pg_types),
+                        )
+                    )
+                    await db.execute(
+                        delete(CacheFundamentals).where(CacheFundamentals.ticker == sym)
+                    )
+        except Exception as e:
+            log.error("PG invalidate_fundamentals error %s: %s", sym, e)
+
+        log.info("Cache invalidated (fundamentals): %s — %d Redis keys + PG rows",
+                 sym, len(redis_keys))
+
+    async def invalidate(self, ticker: str) -> None:
+        """Full cache wipe for *ticker* — Redis + all Postgres rows."""
+        await self.invalidate_fundamentals(ticker)
+        sym = ticker.upper()
+        for k in [_price_key(sym), _profile_key(sym), _earnings_key(sym),
+                  _facts_key(sym), _metrics_snap_key(sym), _price_snap_key(sym),
+                  _ownership_key(sym), _est_annual_key(sym), _est_quarterly_key(sym),
+                  _insider_key(sym)]:
+            await self.cache.delete(k)
+        try:
+            async with AsyncSessionLocal() as db:
+                async with db.begin():
+                    await db.execute(
+                        delete(CacheDataset).where(CacheDataset.ticker == sym)
+                    )
+        except Exception as e:
+            log.error("PG invalidate error %s: %s", sym, e)
+        log.info("Full cache invalidated: %s", sym)
