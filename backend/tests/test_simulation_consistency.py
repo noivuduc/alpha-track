@@ -351,6 +351,7 @@ class TestEdgeCases:
             "sharpe", "sortino", "beta", "alpha_pct",
             "max_drawdown_pct", "volatility_pct",
             "annualized_return_pct", "var_95_pct",
+            "win_rate_pct", "win_rate_excess_pct",
         }
         rets, vals, spy_r = _twr_returns_from_lots(LOTS, HISTORIES)
         snap = compute_snapshot(rets, vals, spy_r)

@@ -173,11 +173,18 @@ def cumulative_series(returns: list[float], base: float = 100.0) -> list[float]:
 
 
 def annualized_return(returns: list[float]) -> float:
-    """Geometric annualized return (%)."""
+    """Geometric annualized return (%).
+
+    Returns -100.0 when the compounded factor is ≤ 0 (total wipe-out or
+    worse), which prevents NaN from raising a negative number to a
+    fractional power.
+    """
     if not returns:
         return 0.0
     r     = np.asarray(returns, dtype=np.float64)
     total = float(np.prod(1.0 + r))
+    if total <= 0:
+        return -100.0
     return round((total ** (TRADING_YR / len(r)) - 1) * 100, 4)
 
 

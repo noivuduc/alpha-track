@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     CACHE_ANALYTICS_TTL:  int = 3600       # 1 hr  — portfolio analytics
     CACHE_ANALYSIS_TTL:   int = 900        # 15 min — health/suggestions/clusters
 
+    # ── Financial constants ───────────────────────────────────────────────
+    RISK_FREE_RATE: float = 0.02           # annual risk-free rate (2 % default)
+
     # ── Cost guard ────────────────────────────────────────────────────────
     FD_MAX_CALLS_PER_REQUEST: int = 10     # max paid API calls per request before fallback
 

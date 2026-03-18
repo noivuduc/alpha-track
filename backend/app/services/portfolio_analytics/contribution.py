@@ -18,8 +18,12 @@ def compute_contribution(
     """
     Per-ticker contribution to portfolio return.
 
-    contribution_pct  = pnl_contribution / portfolio_initial_value × 100
+    contribution_pct  = pnl_contribution / portfolio_current_value × 100
     pnl_contribution  = ticker_current_value − ticker_total_cost
+
+    Denominator is the portfolio's CURRENT value (portfolio_values[-1]).
+    This ensures recently-opened positions are scaled correctly relative to
+    the portfolio they exist in today, not the stale inception NAV.
 
     Returns a list sorted by pnl_contribution descending.
     """

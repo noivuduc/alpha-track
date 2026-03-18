@@ -145,42 +145,106 @@ def compute_engine(
     cash_flows   = build_cash_flows(lots, active_dates)
     port_returns = compute_twr_returns(portfolio_values, active_dates, cash_flows)
 
-    # Guard: drop NaN returns (can arise from data gaps) and require ≥ 2 points
-    _pr = np.asarray(port_returns, dtype=np.float64)
-    _pr = _pr[~np.isnan(_pr)]
-    port_returns = _pr.tolist()
+    # Guard: drop NaN returns (can arise from data gaps) and require ≥ 2 points.
+    # Track NaN count and return_dates for data quality and downstream alignment.
+    _raw_twr   = np.asarray(port_returns, dtype=np.float64)
+    _nan_count = int(np.sum(np.isnan(_raw_twr)))
+    _raw_total = len(_raw_twr)
+    _mask      = ~np.isnan(_raw_twr)
+    port_returns = _raw_twr[_mask].tolist()
+    # return_dates: dates corresponding 1-to-1 with port_returns (active_dates[1:] filtered)
+    return_dates: list[str] = [d for d, m in zip(active_dates[1:], _mask.tolist()) if m]
     if len(port_returns) < 2:
         log.warning("compute_engine: insufficient clean returns after NaN removal (n=%d)", len(port_returns))
         return dict(_EMPTY_RESULT)
 
+    # cumul_dates: [inception_date] + return_dates — aligns 1-to-1 with port_cumul
+    cumul_dates: list[str] = [active_dates[0]] + return_dates
+
     # Generate the cash-flow-neutral cumulative wealth index immediately
     port_cumul   = cumulative_series(port_returns)
 
-    # ── Step 3: Benchmark price series aligned to active_dates (forward-fill) ─
-    def _bench_ff(ticker: str) -> list[float]:
+    # ── Step 3: Benchmark returns aligned via date intersection ──────────────
+    # _bench_ff returns (prices, dates) — only the subset of active_dates where
+    # a forward-filled price exists.  We build a date→return map from each
+    # benchmark and intersect with return_dates so that cross-asset metrics
+    # (beta, alpha, IR, corr) are NEVER computed across mismatched dates.
+    # [:min(len, len)] is never used.
+    def _bench_ff(ticker: str) -> tuple[list[float], list[str]]:
         d2c    = price_lookup.get(ticker, {})
         last_p: float | None = None
-        out: list[float] = []
+        prices: list[float] = []
+        bdates: list[str]   = []
         for d in active_dates:
             p = d2c.get(d)
             if p and p > 0:
                 last_p = p
-            if last_p:
-                out.append(last_p)
-        return out
+            if last_p is not None:
+                prices.append(last_p)
+                bdates.append(d)
+        return prices, bdates
 
-    bm_closes  = _bench_ff(benchmark)
-    spy_closes = _bench_ff("SPY") if benchmark.upper() != "SPY" else bm_closes
-    qqq_closes = _bench_ff("QQQ") if benchmark.upper() != "QQQ" else bm_closes
+    def _bm_date_return_map(prices: list[float], bdates: list[str]) -> dict[str, float]:
+        """Build {date: daily_return} from a forward-filled price+date series.
 
-    bm_returns  = daily_returns(bm_closes)  if len(bm_closes)  >= 2 else []
-    spy_returns = daily_returns(spy_closes) if len(spy_closes) >= 2 else []
-    qqq_returns = daily_returns(qqq_closes) if len(qqq_closes) >= 2 else []
+        Inline loop guarantees 1-to-1 bdates[i] → return correspondence.
+        Avoids daily_returns() which silently skips entries when prev == 0,
+        which would break the date→return mapping.
+        """
+        if len(prices) < 2:
+            return {}
+        d2r: dict[str, float] = {}
+        for i in range(1, len(prices)):
+            if prices[i - 1] > 0:
+                d2r[bdates[i]] = prices[i] / prices[i - 1] - 1.0
+        return d2r
+
+    def _align_to_portfolio(d2r: dict[str, float]) -> tuple[list[float], list[float]]:
+        """
+        Intersect portfolio return dates with benchmark return dates.
+        Returns (port_aligned, bm_aligned) — identical length, same calendar.
+        NEVER uses [:min(len, len)].
+        """
+        port_al: list[float] = []
+        bm_al:   list[float] = []
+        for d, pr in zip(return_dates, port_returns):
+            if d in d2r:
+                port_al.append(pr)
+                bm_al.append(d2r[d])
+        return port_al, bm_al
+
+    bm_prices,  bm_pdates  = _bench_ff(benchmark)
+    spy_prices, spy_pdates = _bench_ff("SPY") if benchmark.upper() != "SPY" else (bm_prices, bm_pdates)
+    qqq_prices, qqq_pdates = _bench_ff("QQQ") if benchmark.upper() != "QQQ" else (bm_prices, bm_pdates)
+
+    bm_d2r  = _bm_date_return_map(bm_prices,  bm_pdates)
+    spy_d2r = _bm_date_return_map(spy_prices, spy_pdates)
+    qqq_d2r = _bm_date_return_map(qqq_prices, qqq_pdates)
+
+    # Aligned pairs for cross-asset metrics — identical calendar, identical length
+    port_for_bm,  bm_returns  = _align_to_portfolio(bm_d2r)
+    port_for_spy, spy_returns = _align_to_portfolio(spy_d2r)
+    port_for_qqq, qqq_returns = _align_to_portfolio(qqq_d2r)
+
+    # Full-length benchmark returns aligned 1-to-1 with return_dates.
+    # Missing benchmark dates get 0.0 (flat price — equivalent to forward-fill).
+    # Used for rolling metrics and chart cumulatives where positional alignment
+    # matters.  Static risk metrics (beta, alpha, IR, corr, captures) still use
+    # the properly intersected pairs above.
+    spy_rets_full = [spy_d2r.get(d, 0.0) for d in return_dates]
+    qqq_rets_full = [qqq_d2r.get(d, 0.0) for d in return_dates]
+    bm_rets_full  = [bm_d2r.get(d,  0.0) for d in return_dates]
+
+    # Date-keyed price lookup for chart functions that need closes at cumul_dates
+    spy_d2p = dict(zip(spy_pdates, spy_prices))
+    qqq_d2p = dict(zip(qqq_pdates, qqq_prices))
+    spy_closes = [spy_d2p.get(d, 0.0) for d in cumul_dates]
+    qqq_closes = [qqq_d2p.get(d, 0.0) for d in cumul_dates]
 
     # ── Step 4: Risk metrics ───────────────────────────────────────────────────
-    b   = beta(port_returns, bm_returns)             if bm_returns else 1.0
-    a   = alpha(port_returns, bm_returns, b)         if bm_returns else 0.0
-    ir  = information_ratio(port_returns, bm_returns) if bm_returns else 0.0
+    b   = beta(port_for_bm, bm_returns)              if bm_returns else 1.0
+    a   = alpha(port_for_bm, bm_returns, b)          if bm_returns else 0.0
+    ir  = information_ratio(port_for_bm, bm_returns) if bm_returns else 0.0
     var = value_at_risk(port_returns)
 
     # annualized_return / annualized_vol imported at module level from portfolio_metrics
@@ -217,13 +281,13 @@ def compute_engine(
     }
 
     # ── Step 6: Correlation (portfolio vs SPY/QQQ) ────────────────────────────
-    corr_spy = pearson_corr(port_returns, spy_returns) if spy_returns else None
-    corr_qqq = pearson_corr(port_returns, qqq_returns) if qqq_returns else None
+    corr_spy = pearson_corr(port_for_spy, spy_returns) if spy_returns else None
+    corr_qqq = pearson_corr(port_for_qqq, qqq_returns) if qqq_returns else None
 
     # ── Step 7: Cumulative series for benchmark comparison chart ──────────────
-    bm_cumul   = cumulative_series(bm_returns)  if bm_returns  else []
-    spy_cumul  = cumulative_series(spy_returns) if spy_returns else (bm_cumul if benchmark.upper() == "SPY" else [])
-    qqq_cumul  = cumulative_series(qqq_returns) if qqq_returns else (bm_cumul if benchmark.upper() == "QQQ" else [])
+    bm_cumul  = cumulative_series(bm_rets_full)  if bm_d2r  else []
+    spy_cumul = cumulative_series(spy_rets_full) if spy_d2r else (bm_cumul if benchmark.upper() == "SPY" else [])
+    qqq_cumul = cumulative_series(qqq_rets_full) if qqq_d2r else (bm_cumul if benchmark.upper() == "QQQ" else [])
 
     bench_cumul: dict[str, list[float]] = {}
     if spy_cumul: bench_cumul["SPY"] = spy_cumul
@@ -233,14 +297,14 @@ def compute_engine(
     # Drawdown is computed on the TWR cumulative index (port_cumul) rather than
     # raw NAV so that capital injections don't create artificial new peaks.
     # port_cumul starts at 100 and grows purely by market performance.
-    dd_data    = drawdown_series(active_dates, port_cumul)
-    perf_chart = performance_series(active_dates, port_cumul, bench_cumul)
+    dd_data    = drawdown_series(cumul_dates, port_cumul)
+    perf_chart = performance_series(cumul_dates, port_cumul, bench_cumul)
     # Monthly returns compound daily TWR returns — cash-flow-neutral aggregation.
-    mo_ret     = monthly_returns_twr(active_dates[1:], port_returns)
+    mo_ret     = monthly_returns_twr(return_dates, port_returns)
 
     # ── Step 9: Derived metrics ────────────────────────────────────────────────
     derived = compute_derived_metrics(
-        dates         = active_dates,
+        dates         = cumul_dates,
         port_values   = port_cumul,
         port_returns  = port_returns,
         spy_values    = spy_cumul,
@@ -251,7 +315,7 @@ def compute_engine(
     # ── Step 10: Rolling returns ───────────────────────────────────────────────
     # Use the TWR cumulative index for look-back return windows so that
     # historical cash flows don't distort the 1W/1M/3M/YTD/1Y figures.
-    rolling = compute_rolling_returns(port_cumul, active_dates)
+    rolling = compute_rolling_returns(port_cumul, cumul_dates)
 
     # ── Step 11: Contribution analytics ───────────────────────────────────────
     contribution = compute_contribution(lots, price_lookup, active_dates, portfolio_values)
@@ -260,26 +324,29 @@ def compute_engine(
     pos_analytics = compute_position_analytics(lots, price_lookup, active_dates, portfolio_values)
 
     # ── Step 13: Rolling risk metrics (63 / 126 / 252-day windows) ────────────
-    rolling_risk = compute_rolling_risk_metrics(port_returns, spy_returns, active_dates)
+    rolling_risk = compute_rolling_risk_metrics(port_returns, spy_rets_full, return_dates)
 
     # ── Steps 14–24: Advanced analytics (each wrapped to isolate failures) ──────
+
+    failed_metrics: list[str] = []
 
     def _safe(label: str, fn, *args, default=None, **kwargs):
         try:
             return fn(*args, **kwargs)
         except Exception as exc:
             log.error("engine [metric_failed] %s: %s", label, exc, exc_info=True)
+            failed_metrics.append(label)
             return default if default is not None else {}
 
     rolling_corr_spy = _safe(
         "rolling_corr_spy",
-        compute_rolling_correlation, port_returns, spy_returns, active_dates,
+        compute_rolling_correlation, port_returns, spy_rets_full, return_dates,
         default=[],
-    ) if spy_returns else []
+    ) if spy_d2r else []
 
     vol_regime = _safe(
         "vol_regime",
-        compute_volatility_regime, port_returns, active_dates,
+        compute_volatility_regime, port_returns, return_dates,
         default=[],
     )
 
@@ -290,13 +357,13 @@ def compute_engine(
 
     rolling_mdd_6m = _safe(
         "rolling_mdd_6m",
-        compute_rolling_max_drawdown, port_cumul, active_dates,
+        compute_rolling_max_drawdown, port_cumul, cumul_dates,
         default=[], window=126,
     )
 
     captures = _safe(
         "captures",
-        compute_capture_ratios, port_returns, bm_returns,
+        compute_capture_ratios, port_for_bm, bm_returns,
     ) if bm_returns else {}
 
     turnover = _safe(
@@ -307,7 +374,7 @@ def compute_engine(
 
     growth100 = _safe(
         "growth100",
-        compute_growth_of_100, active_dates, port_cumul, spy_closes, qqq_closes,
+        compute_growth_of_100, cumul_dates, port_cumul, spy_closes, qqq_closes,
         default=[],
     )
 
@@ -319,13 +386,13 @@ def compute_engine(
 
     daily_heatmap = _safe(
         "daily_heatmap",
-        compute_daily_return_heatmap, active_dates[1:], port_returns,
+        compute_daily_return_heatmap, return_dates, port_returns,
         default=[],
     )
 
     weekly_returns = _safe(
         "weekly_returns",
-        weekly_returns_twr, active_dates[1:], port_returns,
+        weekly_returns_twr, return_dates, port_returns,
         default=[],
     )
 
@@ -344,11 +411,9 @@ def compute_engine(
 
     # ── Data quality score (0–1) ───────────────────────────────────────────────
     # Penalizes short history, high NaN ratio, and missing benchmark data.
-    _all_returns = compute_twr_returns(portfolio_values, active_dates, cash_flows)
-    _total        = len(_all_returns)
-    _nan_count    = sum(1 for r in _all_returns if r != r)   # NaN check via reflexivity
-    _nan_ratio    = _nan_count / _total if _total else 1.0
-    data_quality  = 1.0
+    # NaN stats reuse _nan_count / _raw_total tracked in Step 2 (no duplicate TWR call).
+    _nan_ratio   = _nan_count / _raw_total if _raw_total else 1.0
+    data_quality = 1.0
     if len(port_returns) < 60:   data_quality -= 0.2   # < 3 months of history
     if len(port_returns) < 20:   data_quality -= 0.3   # < 1 month — very unreliable
     if _nan_ratio > 0.10:        data_quality -= 0.2   # > 10 % NaN days
@@ -356,13 +421,14 @@ def compute_engine(
     data_quality = round(max(0.0, data_quality), 2)
 
     return {
-        "status": "ok",
+        "status": "partial" if failed_metrics else "ok",
         # ─── Metadata: method + constants used for every metric ──────────────
         "meta": {
-            "rf_rate":  RF_ANNUAL,
-            "method":   "TWR",
-            "period":   "1y",
-            "version":  "v2",
+            "rf_rate":        RF_ANNUAL,
+            "method":         "TWR",
+            "period":         "1y",
+            "version":        "v2",
+            "failed_metrics": failed_metrics,
         },
         "data_quality": data_quality,
         # ─── Existing fields (backward-compatible) ──────────────────────────

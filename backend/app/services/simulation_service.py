@@ -37,6 +37,8 @@ from app.services.portfolio_analytics.portfolio_metrics import (
     build_price_lookup,
     align_series,
     reconstruct_portfolio_value,
+    build_cash_flows,
+    compute_twr_returns,
     daily_returns,
     cumulative_series,
     pearson_corr,
@@ -232,11 +234,12 @@ async def simulate_add_position(
     if not portfolio_values:
         raise ValueError("Could not reconstruct portfolio value — check positions and price history")
 
-    # ── Step 5: "Before" returns — simple daily returns from reconstructed NAV ─
-    # Use simple returns (not TWR) so that the blend with the new ticker's
-    # simple returns is methodologically consistent.  Both series are pure
-    # market-return series and can be linearly combined by weight.
-    before_rets = daily_returns(portfolio_values)
+    # ── Step 5: "Before" returns — TWR (identical to dashboard) ──────────────
+    # MUST use compute_twr_returns so that simulation "before" metrics match
+    # the dashboard exactly.  Simple daily_returns would inflate performance on
+    # days when new lots were added (cash-flow distortion).
+    cash_flows  = build_cash_flows(lots, active_dates)
+    before_rets = compute_twr_returns(portfolio_values, active_dates, cash_flows)
     before_vals = cumulative_series(before_rets)
 
     if len(before_rets) < 5:
@@ -254,11 +257,11 @@ async def simulate_add_position(
         for i in range(n)
     ]
 
-    # ── Step 7: "After" returns — weighted blend of simple returns ────────────
-    # after[i] = (1−w) × portfolio_simple[i]  +  w × new_ticker_daily[i]
+    # ── Step 7: "After" returns — weighted blend of TWR + simple ─────────────
+    # after[i] = (1−w) × portfolio_twr[i]  +  w × new_ticker_daily[i]
     #
-    # Both series are simple daily returns — the blend correctly models
-    # allocating fraction w to the new ticker each day.
+    # portfolio_twr is cash-flow-stripped; new_ticker_daily is simple.
+    # Both represent pure daily market returns and can be linearly combined.
     after_rets = [
         (1.0 - new_weight) * before_rets[i] + new_weight * new_rets_aligned[i]
         for i in range(n)
