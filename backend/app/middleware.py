@@ -99,6 +99,9 @@ async def get_current_user(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account deactivated")
 
     request.state.user = user
+    # Store the ID as a plain scalar so the request-logger middleware can read
+    # it after the DB session closes (avoids DetachedInstanceError on lazy-load).
+    request.state.user_id = str(user.id)
     return user
 
 async def get_current_active_user(user: User = Depends(get_current_user)) -> User:

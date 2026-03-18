@@ -14,16 +14,23 @@ values when given the same return series.
 """
 from __future__ import annotations
 
+import logging
+
+import numpy as np
+
+log = logging.getLogger(__name__)
+
 from .portfolio_reconstruction import reconstruct_portfolio_value
 from .return_series import (
     daily_returns, cumulative_series,
     build_cash_flows, compute_twr_returns,
 )
 from .math_utils import pct_change
+from .constants import RF_ANNUAL
 # ── Import ALL metrics from the canonical SoT module ──────────────────────────
 from .portfolio_metrics import (
     beta, alpha, sharpe, sortino, max_drawdown, calmar,
-    win_rate, information_ratio, value_at_risk, pearson_corr,
+    win_rate, win_rate_excess, information_ratio, value_at_risk, pearson_corr,
     compute_downside_risk,
     compute_snapshot,                            # used for debug logging
     annualized_return, annualized_vol,
@@ -38,7 +45,7 @@ from .rolling_metrics import (
 from .contribution import compute_contribution
 from .positions   import compute_position_analytics, compute_position_summary  # noqa: F401 (re-exported)
 from .performance import (
-    performance_series, monthly_returns, drawdown_series,
+    performance_series, drawdown_series,
     compute_growth_of_100, compute_return_distribution,
     compute_derived_metrics, compute_daily_return_heatmap,
     compute_period_extremes,
@@ -55,7 +62,8 @@ from .exposure import (
 _EMPTY_RISK: dict = {
     "sharpe": 0.0, "sortino": 0.0, "beta": 1.0, "alpha_pct": 0.0,
     "max_drawdown_pct": 0.0, "volatility_pct": 0.0, "calmar": 0.0,
-    "win_rate_pct": 0.0, "annualized_return_pct": 0.0,
+    "win_rate_pct": 0.0, "win_rate_excess_pct": 0.0,
+    "annualized_return_pct": 0.0,
     "information_ratio": 0.0, "var_95_pct": 0.0, "trading_days": 0,
 }
 _EMPTY_ROLLING: dict = {
@@ -63,6 +71,9 @@ _EMPTY_ROLLING: dict = {
     "return_3m": None, "return_ytd": None, "return_1y": None,
 }
 _EMPTY_RESULT: dict = {
+    "status":                 "insufficient_data",
+    "meta":                   {"rf_rate": RF_ANNUAL, "method": "TWR", "period": "1y", "version": "v2"},
+    "data_quality":           0.0,
     "risk_metrics":           _EMPTY_RISK,
     "performance":            [],
     "drawdown":               [],
@@ -117,6 +128,12 @@ def compute_engine(
     if not portfolio_values:
         return dict(_EMPTY_RESULT)
 
+    # Guard: all-zero portfolio (no price data resolved)
+    pv_arr = np.asarray(portfolio_values, dtype=np.float64)
+    if np.all(pv_arr == 0.0):
+        log.warning("compute_engine: all portfolio values are zero — no price data")
+        return dict(_EMPTY_RESULT)
+
     # ── Step 2: Build cash flows and compute TWR daily returns ────────────────
     # External cash flows (new lot purchases) are stripped before computing each
     # day's return so that capital injections do not inflate performance metrics.
@@ -127,7 +144,15 @@ def compute_engine(
     # that day (sum of shares × cost_basis for all lots opened on that date).
     cash_flows   = build_cash_flows(lots, active_dates)
     port_returns = compute_twr_returns(portfolio_values, active_dates, cash_flows)
-    
+
+    # Guard: drop NaN returns (can arise from data gaps) and require ≥ 2 points
+    _pr = np.asarray(port_returns, dtype=np.float64)
+    _pr = _pr[~np.isnan(_pr)]
+    port_returns = _pr.tolist()
+    if len(port_returns) < 2:
+        log.warning("compute_engine: insufficient clean returns after NaN removal (n=%d)", len(port_returns))
+        return dict(_EMPTY_RESULT)
+
     # Generate the cash-flow-neutral cumulative wealth index immediately
     port_cumul   = cumulative_series(port_returns)
 
@@ -168,6 +193,7 @@ def compute_engine(
         "volatility_pct":        annualized_vol(port_returns),
         "calmar":                calmar(port_returns, port_cumul),
         "win_rate_pct":          win_rate(port_returns),
+        "win_rate_excess_pct":   win_rate_excess(port_returns),
         "annualized_return_pct": annualized_return(port_returns),
         "information_ratio":     ir,
         "var_95_pct":            var,
@@ -236,44 +262,77 @@ def compute_engine(
     # ── Step 13: Rolling risk metrics (63 / 126 / 252-day windows) ────────────
     rolling_risk = compute_rolling_risk_metrics(port_returns, spy_returns, active_dates)
 
-    # ── Step 14: Rolling correlation vs SPY (90-day) ──────────────────────────
-    rolling_corr_spy = (
-        compute_rolling_correlation(port_returns, spy_returns, active_dates)
-        if spy_returns else []
+    # ── Steps 14–24: Advanced analytics (each wrapped to isolate failures) ──────
+
+    def _safe(label: str, fn, *args, default=None, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            log.error("engine [metric_failed] %s: %s", label, exc, exc_info=True)
+            return default if default is not None else {}
+
+    rolling_corr_spy = _safe(
+        "rolling_corr_spy",
+        compute_rolling_correlation, port_returns, spy_returns, active_dates,
+        default=[],
+    ) if spy_returns else []
+
+    vol_regime = _safe(
+        "vol_regime",
+        compute_volatility_regime, port_returns, active_dates,
+        default=[],
     )
 
-    # ── Step 15: Volatility regime classification (30-day window) ─────────────
-    vol_regime = compute_volatility_regime(port_returns, active_dates)
+    exposure = _safe(
+        "exposure",
+        compute_exposure_metrics, lots, price_lookup, active_dates, portfolio_values,
+    )
 
-    # ── Step 16: Exposure / concentration metrics ──────────────────────────────
-    exposure = compute_exposure_metrics(lots, price_lookup, active_dates, portfolio_values)
+    rolling_mdd_6m = _safe(
+        "rolling_mdd_6m",
+        compute_rolling_max_drawdown, port_cumul, active_dates,
+        default=[], window=126,
+    )
 
-    # ── Step 17: Rolling 6-month max drawdown ─────────────────────────────────
-    # TWR index ensures drawdown reflects pure performance loss, not dilution
-    # from adding cash to the portfolio.
-    rolling_mdd_6m = compute_rolling_max_drawdown(port_cumul, active_dates, window=126)
+    captures = _safe(
+        "captures",
+        compute_capture_ratios, port_returns, bm_returns,
+    ) if bm_returns else {}
 
-    # ── Step 18: Market capture ratios ────────────────────────────────────────
-    captures = compute_capture_ratios(port_returns, bm_returns) if bm_returns else {}
+    turnover = _safe(
+        "turnover",
+        compute_turnover_pct, lots, price_lookup, active_dates,
+        default=0.0,
+    )
 
-    # ── Step 19: Turnover estimate ────────────────────────────────────────────
-    turnover = compute_turnover_pct(lots, price_lookup, active_dates)
+    growth100 = _safe(
+        "growth100",
+        compute_growth_of_100, active_dates, port_cumul, spy_closes, qqq_closes,
+        default=[],
+    )
 
-    # ── Step 20: Growth-of-$100 chart ─────────────────────────────────────────
-    growth100 = compute_growth_of_100(active_dates, port_cumul, spy_closes, qqq_closes)
+    ret_dist = _safe(
+        "ret_dist",
+        compute_return_distribution, port_returns,
+        default={"skewness": None, "kurtosis": None},
+    )
 
-    # ── Step 21: Return distribution (skewness / kurtosis) ────────────────────
-    ret_dist = compute_return_distribution(port_returns)
+    daily_heatmap = _safe(
+        "daily_heatmap",
+        compute_daily_return_heatmap, active_dates[1:], port_returns,
+        default=[],
+    )
 
-    # ── Step 22: Daily return heatmap ─────────────────────────────────────────
-    daily_heatmap = compute_daily_return_heatmap(active_dates[1:], port_returns)
+    weekly_returns = _safe(
+        "weekly_returns",
+        weekly_returns_twr, active_dates[1:], port_returns,
+        default=[],
+    )
 
-    # ── Step 23: Weekly returns ────────────────────────────────────────────────
-    # Compound daily TWR returns within each ISO week — same logic as monthly.
-    weekly_returns = weekly_returns_twr(active_dates[1:], port_returns)
-
-    # ── Step 24: Period extremes (best/worst day / week / month) ──────────────
-    period_extremes = compute_period_extremes(daily_heatmap, weekly_returns, mo_ret)
+    period_extremes = _safe(
+        "period_extremes",
+        compute_period_extremes, daily_heatmap, weekly_returns, mo_ret,
+    )
 
     # ── Populate all performance_metrics additions ─────────────────────────────
     perf_metrics["correlation_spy"] = corr_spy
@@ -283,7 +342,29 @@ def compute_engine(
     perf_metrics["estimated_turnover_pct"] = turnover
     perf_metrics.update(ret_dist)
 
+    # ── Data quality score (0–1) ───────────────────────────────────────────────
+    # Penalizes short history, high NaN ratio, and missing benchmark data.
+    _all_returns = compute_twr_returns(portfolio_values, active_dates, cash_flows)
+    _total        = len(_all_returns)
+    _nan_count    = sum(1 for r in _all_returns if r != r)   # NaN check via reflexivity
+    _nan_ratio    = _nan_count / _total if _total else 1.0
+    data_quality  = 1.0
+    if len(port_returns) < 60:   data_quality -= 0.2   # < 3 months of history
+    if len(port_returns) < 20:   data_quality -= 0.3   # < 1 month — very unreliable
+    if _nan_ratio > 0.10:        data_quality -= 0.2   # > 10 % NaN days
+    if not spy_returns:          data_quality -= 0.1   # no benchmark for beta/alpha
+    data_quality = round(max(0.0, data_quality), 2)
+
     return {
+        "status": "ok",
+        # ─── Metadata: method + constants used for every metric ──────────────
+        "meta": {
+            "rf_rate":  RF_ANNUAL,
+            "method":   "TWR",
+            "period":   "1y",
+            "version":  "v2",
+        },
+        "data_quality": data_quality,
         # ─── Existing fields (backward-compatible) ──────────────────────────
         "risk_metrics":    risk_metrics,
         "performance":     perf_chart,
@@ -389,10 +470,11 @@ def compute_all(
     spy_vals   = cumulative_series(daily_returns(spy_closes)) if len(spy_closes) >= 2 else []
 
     return {
+        "meta": {"rf_rate": RF_ANNUAL, "method": "simple", "period": "1y", "version": "v2"},
         "risk_metrics":    risk,
         "performance":     performance_series(port_dates, port_values, bench_vals),
         "drawdown":        dd_data,
-        "monthly_returns": monthly_returns(port_dates, port_values),
+        "monthly_returns": monthly_returns_twr(port_dates[1:], port_returns),
         "derived_metrics": compute_derived_metrics(
             dates         = port_dates,
             port_values   = port_values,

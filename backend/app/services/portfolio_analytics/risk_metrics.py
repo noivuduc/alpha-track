@@ -20,7 +20,7 @@ def sharpe(returns: list[float]) -> float:
         return 0.0
     r  = np.asarray(returns, dtype=np.float64)
     s  = float(r.std(ddof=1))
-    if s == 0.0:
+    if s < 1e-10:
         return 0.0
     return round(float((r.mean() - RF_DAILY) / s) * math.sqrt(TRADING_YR), 4)
 
@@ -33,7 +33,7 @@ def sortino(returns: list[float]) -> float:
     excess   = r - RF_DAILY
     downside = np.minimum(excess, 0.0)
     dd       = math.sqrt(float(np.mean(downside ** 2)))
-    if dd == 0.0:
+    if dd < 1e-10:
         return 0.0
     return round(float(excess.mean()) / dd * math.sqrt(TRADING_YR), 4)
 
@@ -81,7 +81,19 @@ def calmar(returns: list[float], closes: list[float]) -> float:
 
 
 def win_rate(returns: list[float]) -> float:
-    """Percentage of days where return exceeds the daily risk-free rate."""
+    """Percentage of days with a positive return (r > 0)."""
+    if not returns:
+        return 0.0
+    r = np.asarray(returns, dtype=np.float64)
+    return round(float(np.mean(r > 0)) * 100, 2)
+
+
+def win_rate_excess(returns: list[float]) -> float:
+    """Percentage of days where return exceeds the daily risk-free rate (r > RF_DAILY).
+
+    Complements win_rate(): a fund can have many positive days but still
+    underperform cash if it never clears the risk-free hurdle.
+    """
     if not returns:
         return 0.0
     r = np.asarray(returns, dtype=np.float64)
@@ -103,11 +115,10 @@ def information_ratio(port_returns: list[float], bench_returns: list[float]) -> 
 
 def value_at_risk(returns: list[float], confidence: float = 0.95) -> float:
     """Historical VaR at `confidence` level, expressed as positive percentage."""
-    if len(returns) < 20:
+    if len(returns) < 30:
         return 0.0
-    r   = np.asarray(returns, dtype=np.float64)
-    idx = int((1.0 - confidence) * len(r))
-    return round(float(np.abs(np.sort(r)[idx])) * 100, 4)
+    r = np.asarray(returns, dtype=np.float64)
+    return round(float(-np.percentile(r, (1.0 - confidence) * 100)) * 100, 4)
 
 
 def pearson_corr(x: list[float], y: list[float]) -> float | None:
@@ -115,12 +126,13 @@ def pearson_corr(x: list[float], y: list[float]) -> float | None:
     n = min(len(x), len(y))
     if n < 20:
         return None
-    corr_matrix = np.corrcoef(
-        np.asarray(x[:n], dtype=np.float64),
-        np.asarray(y[:n], dtype=np.float64),
-    )
+    xa = np.asarray(x[:n], dtype=np.float64)
+    ya = np.asarray(y[:n], dtype=np.float64)
+    if xa.std() < 1e-10 or ya.std() < 1e-10:
+        return 0.0
+    corr_matrix = np.corrcoef(xa, ya)
     c = float(corr_matrix[0, 1])
-    return round(c, 4) if np.isfinite(c) else None
+    return round(c, 4) if np.isfinite(c) else 0.0
 
 
 def compute_downside_risk(

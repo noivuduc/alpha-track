@@ -26,7 +26,7 @@ def compute_contribution(
     if not portfolio_values or not active_dates:
         return []
 
-    portfolio_initial_value = portfolio_values[0]
+    portfolio_current_value = portfolio_values[-1]
     portfolio_tickers       = {lot["ticker"] for lot in lots}
 
     # Forward-fill to obtain the latest price for each ticker
@@ -61,12 +61,21 @@ def compute_contribution(
     tickers_list = list(tickers_set.keys())
 
     # Vectorised P&L and contribution % computation
+    #
+    # Current method: contribution_pct = pnl / current_portfolio_value × 100
+    # Using current NAV as denominator ensures recently-opened positions are
+    # correctly scaled relative to the portfolio they exist in today.
+    #
+    # TODO: upgrade to time-weighted contribution for full accuracy:
+    #   contribution_t = weight_t × return_t  (sum over all active trading days)
+    # This requires daily weight and return series per position, which in turn
+    # requires aligning lot open dates to the price history calendar.
     costs  = np.asarray(cost_acc,  dtype=np.float64)
     values = np.asarray(value_acc, dtype=np.float64)
     pnl    = values - costs
     contrib_pct = (
-        pnl / portfolio_initial_value * 100
-        if portfolio_initial_value > 0
+        pnl / portfolio_current_value * 100
+        if portfolio_current_value > 0
         else np.zeros_like(pnl)
     )
 

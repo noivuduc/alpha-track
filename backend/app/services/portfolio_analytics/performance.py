@@ -6,9 +6,8 @@ any bulk array operations.  List outputs preserve API compatibility.
 """
 from __future__ import annotations
 
-import statistics as _stats
-
 import numpy as np
+from scipy.stats import skew as _scipy_skew, kurtosis as _scipy_kurtosis
 
 from datetime import date as _date  # noqa: E402 — used inside compute_daily_return_heatmap
 
@@ -196,13 +195,15 @@ def compute_return_distribution(returns: list[float]) -> dict:
     if len(returns) < 4:
         return {"skewness": None, "kurtosis": None}
     r = np.asarray(returns, dtype=np.float64)
-    s = float(r.std(ddof=1))
-    if s == 0.0:
+    if float(r.std(ddof=1)) < 1e-10:
         return {"skewness": 0.0, "kurtosis": 0.0}
-    centered = r - r.mean()
-    skew = float(np.mean(centered ** 3) / s ** 3)
-    kurt = float(np.mean(centered ** 4) / s ** 4) - 3.0
-    return {"skewness": round(skew, 4), "kurtosis": round(kurt, 4)}
+    # Fisher-Pearson bias-corrected estimators (bias=False, fisher=True for excess kurtosis)
+    skew = float(_scipy_skew(r, bias=False))
+    kurt = float(_scipy_kurtosis(r, bias=False, fisher=True))
+    return {
+        "skewness": round(skew, 4) if np.isfinite(skew) else 0.0,
+        "kurtosis": round(kurt, 4) if np.isfinite(kurt) else 0.0,
+    }
 
 
 def compute_daily_return_heatmap(

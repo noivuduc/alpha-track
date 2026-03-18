@@ -121,7 +121,7 @@ def compute_rolling_risk_metrics(
         nd = len(active_dates)
         series: list[dict] = []
         for k in range(n_windows):
-            d = active_dates[min(k + W, nd - 1)]
+            d = active_dates[min(k + W - 1, nd - 1)]
             series.append({
                 "date":               d,
                 "rolling_sharpe":     _f4(r_sharpe[k]),
@@ -167,7 +167,7 @@ def compute_rolling_correlation(
     nd     = len(active_dates)
     result = []
     for k in range(pw.shape[0]):
-        d = active_dates[min(k + window, nd - 1)]
+        d = active_dates[min(k + window - 1, nd - 1)]
         result.append({"date": d, "value": _f4(corr[k])})
     return result
 
@@ -198,7 +198,7 @@ def compute_volatility_regime(
     nd     = len(active_dates)
     result = []
     for k in range(pw.shape[0]):
-        d   = active_dates[min(k + window, nd - 1)]
+        d   = active_dates[min(k + window - 1, nd - 1)]
         vol = float(vols[k])
         regime = "low" if vol < 10.0 else ("high" if vol > 20.0 else "normal")
         result.append({"date": d, "volatility": round(vol, 2), "regime": regime})

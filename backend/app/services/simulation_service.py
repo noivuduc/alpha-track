@@ -34,16 +34,11 @@ import logging
 from app.services.data_service import DataService
 from app.services.portfolio_analytics.portfolio_metrics import (
     compute_snapshot,
-    # TWR pipeline
     build_price_lookup,
     align_series,
     reconstruct_portfolio_value,
-    build_cash_flows,
-    compute_twr_returns,
-    # Simple daily returns (for new ticker + after blend)
     daily_returns,
     cumulative_series,
-    # Correlation
     pearson_corr,
 )
 
@@ -237,17 +232,18 @@ async def simulate_add_position(
     if not portfolio_values:
         raise ValueError("Could not reconstruct portfolio value — check positions and price history")
 
-    # ── Step 5: TWR "before" returns (IDENTICAL method to dashboard) ──────────
-    cash_flows  = build_cash_flows(lots, active_dates)
-    before_rets = compute_twr_returns(portfolio_values, active_dates, cash_flows)
+    # ── Step 5: "Before" returns — simple daily returns from reconstructed NAV ─
+    # Use simple returns (not TWR) so that the blend with the new ticker's
+    # simple returns is methodologically consistent.  Both series are pure
+    # market-return series and can be linearly combined by weight.
+    before_rets = daily_returns(portfolio_values)
     before_vals = cumulative_series(before_rets)
 
     if len(before_rets) < 5:
         raise ValueError("Insufficient active trading days in portfolio history")
 
     # ── Step 6: New ticker daily returns aligned to the SAME active_dates ─────
-    # Forward-fill so every date in active_dates has a price (same treatment as
-    # benchmark series in compute_engine → _bench_ff).
+    # Forward-fill so every date in active_dates has a price.
     new_ticker_closes = _ff_closes(new_ticker, price_lookup, active_dates)
     new_ticker_rets   = daily_returns(new_ticker_closes) if len(new_ticker_closes) >= 2 else []
 
@@ -258,11 +254,11 @@ async def simulate_add_position(
         for i in range(n)
     ]
 
-    # ── Step 7: "After" returns — linear blend ────────────────────────────────
-    # after[i] = (1−w) × portfolio_twr[i]  +  w × new_ticker_daily[i]
+    # ── Step 7: "After" returns — weighted blend of simple returns ────────────
+    # after[i] = (1−w) × portfolio_simple[i]  +  w × new_ticker_daily[i]
     #
-    # This models scaling the current portfolio to (1−w) and allocating w to
-    # the new ticker, evaluated on each day of the shared market calendar.
+    # Both series are simple daily returns — the blend correctly models
+    # allocating fraction w to the new ticker each day.
     after_rets = [
         (1.0 - new_weight) * before_rets[i] + new_weight * new_rets_aligned[i]
         for i in range(n)

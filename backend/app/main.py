@@ -138,11 +138,10 @@ async def request_logger(request: Request, call_next):
     if hasattr(request.state, "rate_rpm_remaining"):
         response.headers["X-RateLimit-Remaining"] = str(request.state.rate_rpm_remaining)
 
-    user_id = (
-        str(request.state.user.id)
-        if hasattr(request.state, "user") and request.state.user
-        else None
-    )
+    # Read user_id from the pre-extracted scalar stored by the auth dependency.
+    # Accessing request.state.user.id here would trigger a SQLAlchemy lazy-load
+    # on a detached instance (session already closed after call_next).
+    user_id = getattr(request.state, "user_id", None)
 
     log.info(
         "request",

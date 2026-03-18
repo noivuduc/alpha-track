@@ -41,6 +41,7 @@ from .risk_metrics import (          # noqa: F401 — intentional re-export
     pearson_corr,
     calmar,
     win_rate,
+    win_rate_excess,
     information_ratio,
     compute_downside_risk,
 )
@@ -176,12 +177,14 @@ def compute_snapshot(
     a = alpha(port_returns, spy_returns, b) if spy_returns else 0.0
 
     return {
-        "sharpe":                round(s,                              4),
-        "sortino":               round(sortino(port_returns),          4),
-        "beta":                  round(b,                              4),
-        "alpha_pct":             round(a,                              4),
-        "max_drawdown_pct":      round(max_drawdown(port_values),      4),
-        "volatility_pct":        round(ann_v,                          4),
-        "annualized_return_pct": round(ann_ret,                        4),
-        "var_95_pct":            round(value_at_risk(port_returns),    4),
+        "sharpe":                round(s,                                    4),
+        "sortino":               round(sortino(port_returns),                4),
+        "beta":                  round(b,                                    4),
+        "alpha_pct":             round(a,                                    4),
+        "max_drawdown_pct":      round(max_drawdown(port_values),            4),
+        "volatility_pct":        round(ann_v,                                4),
+        "annualized_return_pct": round(ann_ret,                              4),
+        "var_95_pct":            round(value_at_risk(port_returns),          4),
+        "win_rate_pct":          round(win_rate(port_returns),               4),
+        "win_rate_excess_pct":   round(win_rate_excess(port_returns),        4),
     }
