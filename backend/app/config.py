@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     WORKER_ESTIMATES_INTERVAL:    int = 86400   # 24 hr
     WORKER_INSIDER_INTERVAL:      int = 86400   # 24 hr
 
+    # ── Analytics / Analysis cache TTLs ───────────────────────────────────
+    CACHE_ANALYTICS_TTL:  int = 3600       # 1 hr  — portfolio analytics
+    CACHE_ANALYSIS_TTL:   int = 900        # 15 min — health/suggestions/clusters
+
+    # ── Cost guard ────────────────────────────────────────────────────────
+    FD_MAX_CALLS_PER_REQUEST: int = 10     # max paid API calls per request before fallback
+
+    # ── yfinance concurrency ──────────────────────────────────────────────
+    YFINANCE_MAX_CONCURRENT: int = 8       # semaphore: max parallel yfinance fetches
+
     PREFER_FREE_FOR_PRICES: bool = True     # yfinance for prices (free)
     YFINANCE_TIMEOUT:       int = 10
 

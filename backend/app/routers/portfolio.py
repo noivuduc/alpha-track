@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,21 @@ from app.services.portfolio_analysis_service import run_portfolio_analysis
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
+
+# ── Concurrency + retry helpers ───────────────────────────────────────────────
+# Max parallel yfinance fetches — prevents IP rate-limiting from Yahoo
+_yf_semaphore = asyncio.Semaphore(8)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(min=1, max=8),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
+async def _fetch_history(ds, ticker: str, period: str) -> list:
+    """Fetch price history with retry. Used by analytics and analysis endpoints."""
+    return await ds.get_price_history(ticker, period=period, interval="1d")
 
 def _get_ds(db: AsyncSession = Depends(get_db), cache: Cache = Depends(get_cache)) -> DataService:
     return DataService(cache=cache, db=db)
@@ -141,6 +157,10 @@ async def get_analytics(
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
 
+    # force=True is admin-only to prevent cache-bypass abuse
+    if force and not user.is_admin:
+        force = False
+
     cache_key = f"analytics:{portfolio_id}:{period}:{benchmark}"
 
     # ── L1: Redis cache ──────────────────────────────────────
@@ -171,16 +191,17 @@ async def get_analytics(
         for pos in positions
     )
 
-    # ── Fetch price history in parallel ─────────────────────
+    # ── Fetch price history in parallel (semaphore-throttled + retried) ──
     fetch_tickers = list({*tickers, benchmark, "QQQ"})
 
     async def _hist(t: str):
-        try:
-            data = await ds.get_price_history(t, period=period, interval="1d")
-            return t, data
-        except Exception as e:
-            log.warning("analytics: history fetch failed for %s: %s", t, e)
-            return t, []
+        async with _yf_semaphore:
+            try:
+                data = await _fetch_history(ds, t, period)
+                return t, data
+            except Exception as e:
+                log.warning("analytics: history fetch failed for %s after retries: %s", t, e)
+                return t, []
 
     raw = await asyncio.gather(*[_hist(t) for t in fetch_tickers])
     histories = {t: d for t, d in raw if d}
@@ -252,8 +273,8 @@ async def get_analytics(
         "portfolio_news":   all_news,
     }
 
-    # ── Cache for 60 seconds ────────────────────────────────
-    await cache.set(cache_key, _json.dumps(response), 60)
+    # ── Cache for 1 hour ────────────────────────────────────
+    await cache.set(cache_key, _json.dumps(response), 3600)
     return response
 
 
@@ -276,6 +297,10 @@ async def get_portfolio_analysis(
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
+
+    # force=True is admin-only to prevent cache-bypass abuse
+    if force and not user.is_admin:
+        force = False
 
     pos_r = await db.execute(
         select(Position).where(
@@ -350,6 +375,8 @@ async def simulate_portfolio(
 @router.get("/{portfolio_id}/positions", response_model=list[PositionResponse])
 async def list_positions(
     portfolio_id: UUID,
+    limit:  int  = Query(100, ge=1, le=1000, description="Max results"),
+    offset: int  = Query(0,   ge=0,           description="Skip N results"),
     user: User       = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
     ds: DataService  = Depends(_get_ds),
@@ -358,7 +385,12 @@ async def list_positions(
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
-    pos_r     = await db.execute(select(Position).where(Position.portfolio_id == portfolio_id, Position.closed_at == None))
+    pos_r     = await db.execute(
+        select(Position)
+        .where(Position.portfolio_id == portfolio_id, Position.closed_at == None)
+        .limit(limit)
+        .offset(offset)
+    )
     positions = pos_r.scalars().all()
 
     tickers = [pos.ticker for pos in positions]
@@ -441,11 +473,23 @@ async def add_transaction(
     return txn
 
 @router.get("/{portfolio_id}/transactions", response_model=list[TransactionResponse])
-async def list_transactions(portfolio_id: UUID, user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db)):
+async def list_transactions(
+    portfolio_id: UUID,
+    limit:  int  = Query(100, ge=1, le=1000, description="Max results"),
+    offset: int  = Query(0,   ge=0,           description="Skip N results"),
+    user:   User = Depends(check_rate_limit),
+    db:     AsyncSession = Depends(get_db),
+):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
-    result = await db.execute(select(Transaction).where(Transaction.portfolio_id == portfolio_id).order_by(Transaction.traded_at.desc()))
+    result = await db.execute(
+        select(Transaction)
+        .where(Transaction.portfolio_id == portfolio_id)
+        .order_by(Transaction.traded_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     return result.scalars().all()
 
 @router.patch("/{portfolio_id}/transactions/{txn_id}", response_model=TransactionResponse)

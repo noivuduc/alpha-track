@@ -25,12 +25,16 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token:  str
-    refresh_token: str
+    # refresh_token is now set as an httpOnly cookie; this field is kept
+    # for backwards compatibility but is no longer populated server-side.
+    refresh_token: str | None = None
     token_type:    str = "bearer"
     expires_in:    int
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    # Deprecated: refresh token is now sent as an httpOnly cookie.
+    # This field is kept for backwards compatibility with existing clients.
+    refresh_token: str | None = None
 
 class UserResponse(BaseModel):
     id:         UUID
@@ -72,7 +76,10 @@ class PositionCreate(BaseModel):
     @field_validator("ticker")
     @classmethod
     def upper_ticker(cls, v: str) -> str:
-        return v.upper().strip()
+        v = v.upper().strip()
+        if not re.match(r"^[A-Z0-9.\-]{1,10}$", v):
+            raise ValueError("Ticker must be 1–10 chars: A-Z, 0-9, dot, or hyphen")
+        return v
 
 class PositionUpdate(BaseModel):
     shares:     Decimal | None = Field(default=None, gt=0)
@@ -107,7 +114,10 @@ class TransactionCreate(BaseModel):
     @field_validator("ticker")
     @classmethod
     def upper_ticker(cls, v: str) -> str:
-        return v.upper().strip()
+        v = v.upper().strip()
+        if not re.match(r"^[A-Z0-9.\-]{1,10}$", v):
+            raise ValueError("Ticker must be 1–10 chars: A-Z, 0-9, dot, or hyphen")
+        return v
 
 class TransactionUpdate(BaseModel):
     shares:    Decimal  | None = Field(default=None, gt=0, decimal_places=6)
@@ -139,7 +149,10 @@ class WatchlistCreate(BaseModel):
     @field_validator("ticker")
     @classmethod
     def upper_ticker(cls, v: str) -> str:
-        return v.upper().strip()
+        v = v.upper().strip()
+        if not re.match(r"^[A-Z0-9.\-]{1,10}$", v):
+            raise ValueError("Ticker must be 1–10 chars: A-Z, 0-9, dot, or hyphen")
+        return v
 
 class WatchlistResponse(BaseModel):
     id:            UUID
@@ -433,7 +446,10 @@ class SimulateRequest(BaseModel):
     @field_validator("ticker")
     @classmethod
     def upper_ticker(cls, v: str) -> str:
-        return v.upper().strip()
+        v = v.upper().strip()
+        if not re.match(r"^[A-Z0-9.\-]{1,10}$", v):
+            raise ValueError("Ticker must be 1–10 chars: A-Z, 0-9, dot, or hyphen")
+        return v
 
 
 class SimulateSnapshot(BaseModel):

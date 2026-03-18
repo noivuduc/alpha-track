@@ -5,7 +5,7 @@ Middleware:
   - Request logging + latency tracking
   - Subscription quota enforcement
 """
-import time, logging, uuid
+import hashlib, time, logging, uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
@@ -37,23 +37,39 @@ TIER_LIMITS = {
 def hash_password(plain: str) -> str:    return pwd_ctx.hash(plain)
 def verify_password(plain: str, hashed: str) -> bool: return pwd_ctx.verify(plain, hashed)
 
+# ── API key hashing ───────────────────────────────────────────────────────────
+def hash_api_key(raw_key: str) -> str:
+    """SHA-256 hex digest of the raw API key. DB stores only this hash."""
+    return hashlib.sha256(raw_key.encode()).hexdigest()
+
 # ── JWT ───────────────────────────────────────────────────────────────────────
 def create_access_token(user_id: str, tier: str) -> str:
+    jti = str(uuid.uuid4())
     exp = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return jwt.encode({"sub": user_id, "tier": tier, "exp": exp, "type": "access"}, settings.SECRET_KEY, settings.ALGORITHM)
+    return jwt.encode(
+        {"sub": user_id, "tier": tier, "exp": exp, "type": "access", "jti": jti},
+        settings.SECRET_KEY, settings.ALGORITHM,
+    )
 
 def create_refresh_token(user_id: str) -> str:
+    jti = str(uuid.uuid4())
     exp = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    return jwt.encode({"sub": user_id, "exp": exp, "type": "refresh"}, settings.SECRET_KEY, settings.ALGORITHM)
+    return jwt.encode(
+        {"sub": user_id, "exp": exp, "type": "refresh", "jti": jti},
+        settings.SECRET_KEY, settings.ALGORITHM,
+    )
 
 async def _decode_jwt(token: str, cache: Cache) -> dict:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     except JWTError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid token: {e}")
-    # Check blacklist (logout / token rotation)
-    if await cache.exists(f"blacklist:{token}"):
+
+    # Blacklist by JTI — small key, fast lookup
+    jti = payload.get("jti")
+    if jti and await cache.exists(f"blacklist:{jti}"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token revoked")
+
     return payload
 
 # ── Get current user (JWT or API key) ────────────────────────────────────────
@@ -73,7 +89,8 @@ async def get_current_user(
             user = await db.get(User, uuid.UUID(user_id))
 
     elif api_key_val:
-        result = await db.execute(select(User).where(User.api_key == api_key_val))
+        key_hash = hash_api_key(api_key_val)
+        result = await db.execute(select(User).where(User.api_key_hash == key_hash))
         user = result.scalar_one_or_none()
 
     if not user:
@@ -117,15 +134,15 @@ async def check_rate_limit(
             headers={"Retry-After": "3600"},
         )
 
-    # Add rate limit headers to response
     request.state.rate_rpm_remaining = limits["rpm"] - rpm
     request.state.rate_rpd_remaining = limits["rpd"] - rpd
     return user
 
 # ── Admin only ────────────────────────────────────────────────────────────────
 async def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.tier != SubscriptionTier.fund:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Fund tier required")
+    """Requires is_admin=True. Separate from subscription tier."""
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
     return user
 
 # ── Quota checks (call before creating resources) ─────────────────────────────
