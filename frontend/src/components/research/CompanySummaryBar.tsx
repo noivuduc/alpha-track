@@ -27,7 +27,7 @@ export default function CompanySummaryBar({ data, sentinelRef }: Props) {
     if (!el) return;
     const obs = new IntersectionObserver(
       ([entry]) => setVisible(!entry.isIntersecting),
-      { rootMargin: "-48px 0px 0px 0px" }
+      { rootMargin: "-64px 0px 0px 0px" }
     );
     obs.observe(el);
     return () => obs.disconnect();
@@ -40,7 +40,7 @@ export default function CompanySummaryBar({ data, sentinelRef }: Props) {
   const revenue  = data.financials.income_ttm?.revenue;
 
   return (
-    <div className="fixed top-12 left-0 right-0 z-40 bg-zinc-900/97 backdrop-blur-sm border-b border-zinc-800 shadow-lg">
+    <div className="fixed top-16 left-0 right-0 z-40 bg-zinc-900/97 backdrop-blur-sm border-b border-zinc-800 shadow-lg">
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-2 flex items-center gap-4 text-xs overflow-x-auto scrollbar-none">
         {/* Identity */}
         <div className="flex items-center gap-2 shrink-0">

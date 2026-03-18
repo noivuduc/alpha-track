@@ -202,8 +202,8 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
         </div>
       )}
 
-      {/* Everything below the 48px fixed header */}
-      <div className="pt-12">
+      {/* Everything below the 64px fixed header */}
+      <div className="pt-16">
         {/* Company info header — scrolls with page; sentinel marks its bottom edge */}
         <ResearchHeader
           data={data}
@@ -217,7 +217,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
         <div className="max-w-[1800px] mx-auto w-full px-4 sm:px-6 flex gap-6 items-start">
 
           {/* Desktop left nav — sticky, dedicated 240px column */}
-          <aside className="hidden xl:flex flex-col w-60 shrink-0 sticky top-12 h-[calc(100vh-3rem)] overflow-y-auto pt-6 pb-6">
+          <aside className="hidden xl:flex flex-col w-60 shrink-0 sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto pt-6 pb-6">
             <ResearchNav sections={navSections} />
           </aside>
 
