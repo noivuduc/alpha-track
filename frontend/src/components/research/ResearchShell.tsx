@@ -65,6 +65,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
 
   const [data,       setData]       = useState<ResearchData | null>(null);
   const [loading,    setLoading]    = useState(true);
+  const [preparing,  setPreparing]  = useState(false);
   const [error,      setError]      = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [finPeriod,  setFinPeriod]  = useState<"annual" | "quarterly">("annual");
@@ -75,10 +76,12 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
 
   const load = useCallback(async (force = false) => {
     try {
-      const d = await researchApi.get(ticker, force);
+      const d = await researchApi.get(ticker, force, () => setPreparing(true));
+      setPreparing(false);
       setData(d);
       setError("");
     } catch (e: unknown) {
+      setPreparing(false);
       setError(e instanceof Error ? e.message : "Failed to load research data");
     }
   }, [ticker]);
@@ -103,7 +106,14 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
         <GlobalHeader showBack />
         <div className="text-center">
           <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <div className="text-sm text-zinc-500">Loading {ticker} research…</div>
+          {preparing ? (
+            <>
+              <div className="text-sm text-zinc-300 font-medium mb-1">Fetching data for {ticker}…</div>
+              <div className="text-xs text-zinc-600">First-time lookup — this may take a few seconds</div>
+            </>
+          ) : (
+            <div className="text-sm text-zinc-500">Loading {ticker} research…</div>
+          )}
         </div>
       </div>
     );

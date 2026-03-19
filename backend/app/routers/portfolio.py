@@ -45,8 +45,9 @@ async def _fetch_history(ds, ticker: str, period: str) -> list:
     """Fetch price history with retry. Used by analytics and analysis endpoints."""
     return await ds.get_price_history(ticker, period=period, interval="1d")
 
-def _get_ds(db: AsyncSession = Depends(get_db), cache: Cache = Depends(get_cache)) -> DataService:
-    return DataService(cache=cache, db=db)
+async def _get_ds(db: AsyncSession = Depends(get_db), cache: Cache = Depends(get_cache)):
+    async with DataService(cache=cache, db=db) as ds:
+        yield ds
 
 
 async def _invalidate_portfolio_cache(cache: Cache, portfolio_id: UUID) -> None:

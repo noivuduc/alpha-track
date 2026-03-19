@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/market", tags=["market"])
 
-def _get_ds(db: AsyncSession = Depends(get_db), cache: Cache = Depends(get_cache)) -> DataService:
-    return DataService(cache=cache, db=db)
+async def _get_ds(db: AsyncSession = Depends(get_db), cache: Cache = Depends(get_cache)):
+    async with DataService(cache=cache, db=db) as ds:
+        yield ds
 
 @router.get("/price/{ticker}", response_model=PriceResponse)
 async def get_price(ticker: str, user: User = Depends(check_rate_limit), ds: DataService = Depends(_get_ds)):

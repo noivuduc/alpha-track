@@ -99,5 +99,12 @@ class Cache:
         val = await self.r.get(f"alphadesk:{key}")
         return int(val) if val else 0
 
+    async def acquire_lock(self, key: str, ttl: int = 120) -> bool:
+        """Atomic SET NX — returns True only if this caller acquired the lock."""
+        return bool(await self.r.set(f"alphadesk:{key}", "1", nx=True, ex=ttl))
+
+    async def release_lock(self, key: str):
+        await self.r.delete(f"alphadesk:{key}")
+
 def get_cache() -> Cache:
     return Cache(get_redis())

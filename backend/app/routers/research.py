@@ -1,11 +1,15 @@
 """Research router — thin HTTP layer, delegates entirely to ResearchService."""
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, get_cache, Cache
 from app.middleware import check_rate_limit
 from app.models import User
-from app.services.research_service import get_research, get_ai_insights
+from app.services.research_service import (
+    get_research, get_ai_insights,
+    ResearchReady, ResearchPreparing, ResearchError,
+)
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -22,9 +26,27 @@ async def research_endpoint(
     Aggregates: company facts, price snapshot, financial metrics, 10yr financials,
     TTM statements, institutional ownership, insider trades, analyst estimates,
     news, segmented revenues, peer comparisons, earnings history, P/E history.
-    Cached 1 hour in Redis.
+
+    Returns:
+      200 — research data (cached or freshly assembled)
+      202 — data is being fetched in the background; poll again in a few seconds
     """
-    return await get_research(ticker.upper().strip(), force, cache, db)
+    result = await get_research(ticker.upper().strip(), force, cache, db)
+
+    if isinstance(result, ResearchReady):
+        return result.data
+
+    if isinstance(result, ResearchError):
+        return JSONResponse(
+            status_code=200,
+            content={"status": "error", "ticker": ticker.upper().strip(), "detail": result.detail},
+        )
+
+    # ResearchPreparing
+    return JSONResponse(
+        status_code=202,
+        content={"status": "preparing", "ticker": result.ticker},
+    )
 
 
 @router.get("/{ticker}/ai-insights")
