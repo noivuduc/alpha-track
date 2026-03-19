@@ -29,19 +29,16 @@ async def research_endpoint(
 
 @router.get("/{ticker}/ai-insights")
 async def ai_insights_endpoint(
-    ticker:   str,
-    provider: str  = Query("anthropic", description="AI provider: 'anthropic' or 'openai'"),
-    force:    bool = Query(False,        description="Bypass 7-day AI cache"),
-    user:     User  = Depends(check_rate_limit),
-    cache:    Cache = Depends(get_cache),
+    ticker: str,
+    force:  bool = Query(False, description="Bypass 7-day AI cache"),
+    user:   User = Depends(check_rate_limit),
+    cache:  Cache = Depends(get_cache),
 ):
     """
     Return AI-generated investment insights for *ticker*.
 
-    Each provider has its own 7-day cache slot:
-      alphadesk:ai_insight:{TICKER}:anthropic  — Claude Haiku
-      alphadesk:ai_insight:{TICKER}:openai     — GPT-4.1 Mini
-
+    Provider is auto-selected based on configured API keys (anthropic first, openai fallback).
+    If no AI keys are configured, returns {available: false}.
     Requires the research page to have been loaded first (populates research cache).
     """
-    return await get_ai_insights(ticker.upper().strip(), provider, force, cache)
+    return await get_ai_insights(ticker.upper().strip(), force, cache)

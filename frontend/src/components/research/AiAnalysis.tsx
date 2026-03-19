@@ -1,13 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { Sparkles, TrendingUp, TrendingDown, Rocket, AlertTriangle, DollarSign, RefreshCw } from "lucide-react";
-import { researchApi, AiInsights, AiProvider } from "@/lib/api";
-
-// ── Provider config ────────────────────────────────────────────────────────────
-const PROVIDERS: { id: AiProvider; label: string; model: string; badge: string }[] = [
-  { id: "anthropic", label: "Claude",  model: "claude-haiku-4-5",  badge: "bg-violet-500/20 text-violet-300 border-violet-500/30" },
-  { id: "openai",    label: "GPT-4.1", model: "gpt-4.1-mini",      badge: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" },
-];
+import { researchApi, AiInsights } from "@/lib/api";
 
 // ── Section config ─────────────────────────────────────────────────────────────
 const SECTIONS = [
@@ -21,6 +15,12 @@ const SECTIONS = [
 function fmtDate(iso: string): string {
   try { return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
   catch { return iso; }
+}
+
+function modelLabel(provider: string | null, model: string | null): string {
+  if (!provider || !model) return "";
+  const names: Record<string, string> = { anthropic: "Claude", openai: "GPT" };
+  return `${names[provider] ?? provider} · ${model}`;
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -59,17 +59,16 @@ function Skeleton() {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function AiAnalysis({ ticker }: { ticker: string }) {
-  const [provider, setProvider] = useState<AiProvider>("anthropic");
-  const [data,     setData]     = useState<Partial<Record<AiProvider, AiInsights>>>({});
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState<string | null>(null);
+  const [data,    setData]    = useState<AiInsights | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
 
-  const load = useCallback(async (p: AiProvider, force = false) => {
+  const load = useCallback(async (force = false) => {
     setLoading(true);
     setError(null);
     try {
-      const result = await researchApi.aiInsights(ticker, p, force);
-      setData(prev => ({ ...prev, [p]: result }));
+      const result = await researchApi.aiInsights(ticker, force);
+      setData(result);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to load AI analysis";
       setError(msg.includes("404") || msg.includes("cached")
@@ -80,17 +79,7 @@ export default function AiAnalysis({ ticker }: { ticker: string }) {
     }
   }, [ticker]);
 
-  // Load current provider on mount and whenever provider switches
-  useEffect(() => {
-    if (!data[provider]) load(provider);
-    else setLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
-
-  // Initial load
-  useEffect(() => { load("anthropic"); }, [load]);
-
-  const current = data[provider];
+  useEffect(() => { load(); }, [load]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -98,37 +87,22 @@ export default function AiAnalysis({ ticker }: { ticker: string }) {
 
       {/* ── Controls bar ──────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-
-        {/* Provider toggle */}
         <div className="flex items-center gap-2">
-          <span className="text-xs text-zinc-500">Model</span>
-          <div className="flex gap-0.5 bg-zinc-800 rounded-lg p-0.5">
-            {PROVIDERS.map(pv => (
-              <button
-                key={pv.id}
-                onClick={() => setProvider(pv.id)}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  provider === pv.id
-                    ? "bg-zinc-600 text-zinc-100"
-                    : "text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                {pv.label}
-                <span className={`hidden sm:inline text-[10px] px-1.5 py-0.5 rounded border font-mono ${pv.badge}`}>
-                  {pv.model}
-                </span>
-              </button>
-            ))}
-          </div>
+          <Sparkles size={14} className="text-blue-400" />
+          <span className="text-sm font-semibold text-zinc-200">AI Analysis</span>
+          {data?.provider && data?.model && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border bg-zinc-800 text-zinc-400 border-zinc-700 font-mono">
+              {modelLabel(data.provider, data.model)}
+            </span>
+          )}
         </div>
 
-        {/* Metadata + refresh */}
-        {current && (
+        {data?.available && (
           <div className="flex items-center gap-3 text-[11px] text-zinc-600">
-            {current.generated_at && <span>Generated {fmtDate(current.generated_at)}</span>}
-            {current._source === "cache" && <span className="text-zinc-700">· cached</span>}
+            {data.generated_at && <span>Generated {fmtDate(data.generated_at)}</span>}
+            {data._source === "cache" && <span className="text-zinc-700">· cached</span>}
             <button
-              onClick={() => load(provider, true)}
+              onClick={() => load(true)}
               title="Force regenerate"
               className="flex items-center gap-1 text-zinc-600 hover:text-zinc-400 transition-colors"
             >
@@ -151,22 +125,28 @@ export default function AiAnalysis({ ticker }: { ticker: string }) {
         <div className="flex flex-col items-center gap-3 py-8 text-center">
           <p className="text-sm text-zinc-500">{error}</p>
           <button
-            onClick={() => load(provider)}
+            onClick={() => load()}
             className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1.5"
           >
             <RefreshCw size={12} /> Retry
           </button>
         </div>
-      ) : current ? (
+      ) : data && !data.available ? (
+        <div className="flex flex-col items-center gap-2 py-10 text-center">
+          <Sparkles size={20} className="text-zinc-600" />
+          <p className="text-sm text-zinc-500">AI analysis is not available</p>
+          <p className="text-xs text-zinc-600">No AI provider API key is configured on the server.</p>
+        </div>
+      ) : data ? (
         <>
           {/* Executive summary */}
-          {current.summary && (
+          {data.summary && (
             <div className="bg-zinc-800/40 border border-zinc-700/40 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Sparkles size={13} className="text-blue-400" />
                 <span className="text-xs font-semibold text-zinc-300">Executive Summary</span>
               </div>
-              <p className="text-sm text-zinc-300 leading-relaxed">{current.summary}</p>
+              <p className="text-sm text-zinc-300 leading-relaxed">{data.summary}</p>
             </div>
           )}
 
@@ -178,18 +158,18 @@ export default function AiAnalysis({ ticker }: { ticker: string }) {
                   <Icon size={14} />
                   <span className="text-sm font-semibold text-zinc-200">{label}</span>
                 </div>
-                <BulletList items={current[key] ?? []} color={color} />
+                <BulletList items={data[key] ?? []} color={color} />
               </div>
             ))}
           </div>
 
           {/* Valuation view */}
-          {current.valuation_view && (
+          {data.valuation_view && (
             <div className="bg-zinc-800/30 border border-zinc-700/30 rounded-xl p-4 flex gap-3 items-start">
               <DollarSign size={14} className="text-zinc-400 mt-0.5 shrink-0" />
               <div>
                 <div className="text-xs font-semibold text-zinc-400 mb-1">Valuation View</div>
-                <p className="text-xs text-zinc-300 leading-relaxed">{current.valuation_view}</p>
+                <p className="text-xs text-zinc-300 leading-relaxed">{data.valuation_view}</p>
               </div>
             </div>
           )}

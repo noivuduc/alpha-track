@@ -1,6 +1,6 @@
 "use client";
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { auth, User, setAccessToken } from "@/lib/api";
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
+import { auth, User, setAccessToken, onSessionExpired } from "@/lib/api";
 
 interface AuthContextType {
   user: User | null;
@@ -22,8 +22,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const handleSessionExpired = useCallback(() => {
+    setAccessToken(null);
+    setUser(null);
+  }, []);
+
   useEffect(() => {
-    // On mount: try to restore session. apiFetch auto-handles 401 → tryRefresh internally.
+    onSessionExpired(handleSessionExpired);
+    return () => onSessionExpired(null);
+  }, [handleSessionExpired]);
+
+  useEffect(() => {
     auth.me()
       .then(setUser)
       .catch(() => { setUser(null); })

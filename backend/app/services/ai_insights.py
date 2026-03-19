@@ -5,21 +5,23 @@ Cache strategy
   Key : alphadesk:ai_insight:{TICKER}:{provider}
   TTL : 7 days (604 800 s)
 
-Requires
---------
-  ANTHROPIC_API_KEY   — for provider="anthropic"
-  OPENAI_API_KEY      — for provider="openai"
+Provider selection is automatic:
+  1. Use the first provider with a configured API key
+     (preference order: anthropic → openai)
+  2. If no keys are configured, generate_ai_insights returns an
+     "unavailable" response — never raises.
 """
 from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 import anthropic
 import openai as _openai
+
+from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +37,22 @@ PROVIDER_MODELS: dict[str, str] = {
     "anthropic": _ANTHROPIC_MODEL,
     "openai":    _OPENAI_MODEL,
 }
+
+_PROVIDER_PRIORITY: list[Provider] = ["anthropic", "openai"]
+
+
+def _get_available_provider() -> tuple[Provider, str] | None:
+    """Return (provider, api_key) for the first configured provider, or None."""
+    s = get_settings()
+    keys: dict[Provider, str] = {
+        "anthropic": s.ANTHROPIC_API_KEY,
+        "openai":    s.OPENAI_API_KEY,
+    }
+    for p in _PROVIDER_PRIORITY:
+        if keys[p]:
+            return p, keys[p]
+    return None
+
 
 # ── Cache key ─────────────────────────────────────────────────────────────────
 
@@ -163,10 +181,7 @@ Return ONLY a valid JSON object — no markdown fences, no extra text — with e
 
 # ── Provider-specific callers ─────────────────────────────────────────────────
 
-async def _call_anthropic(context: str) -> str:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
+async def _call_anthropic(context: str, api_key: str) -> str:
     client   = anthropic.AsyncAnthropic(api_key=api_key)
     response = await client.messages.create(
         model=_ANTHROPIC_MODEL,
@@ -178,10 +193,7 @@ async def _call_anthropic(context: str) -> str:
     return response.content[0].text.strip()
 
 
-async def _call_openai(context: str) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY environment variable is not set")
+async def _call_openai(context: str, api_key: str) -> str:
     client   = _openai.AsyncOpenAI(api_key=api_key)
     response = await client.chat.completions.create(
         model=_OPENAI_MODEL,
@@ -206,22 +218,45 @@ def _strip_fences(raw: str) -> str:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
+def _unavailable_response() -> dict:
+    """Deterministic response when no AI provider is configured."""
+    return {
+        "summary": "",
+        "strengths": [],
+        "weaknesses": [],
+        "drivers": [],
+        "risks": [],
+        "valuation_view": "",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "model": None,
+        "provider": None,
+        "available": False,
+        "_source": "none",
+    }
+
+
 async def generate_ai_insights(
-    ticker:   str,
-    data:     dict,
-    cache:    Any,
-    provider: Provider = "anthropic",
+    ticker: str,
+    data:   dict,
+    cache:  Any,
 ) -> dict:
     """
     Return AI investment insights for *ticker*.
 
-    Each provider has its own cache slot — switching providers always returns
-    that provider's own cached result without cross-contamination.
+    Provider is chosen automatically based on configured API keys
+    (preference: anthropic → openai). If no keys are set, returns
+    an "unavailable" response with available=False.
 
     Returned dict keys:
       summary, strengths, weaknesses, drivers, risks, valuation_view,
-      generated_at (ISO-8601 UTC), model, provider, _source ("cache"|"generated")
+      generated_at, model, provider, available, _source
     """
+    resolved = _get_available_provider()
+    if resolved is None:
+        log.warning("AI insights unavailable for %s: no API keys configured", ticker)
+        return _unavailable_response()
+
+    provider, api_key = resolved
     model_id = PROVIDER_MODELS[provider]
     key      = ai_cache_key(ticker, provider)
 
@@ -229,12 +264,14 @@ async def generate_ai_insights(
     cached = await cache.get(key)
     if cached:
         result = json.loads(cached)
-        result["_source"] = "cache"
+        result["_source"]   = "cache"
+        result["available"] = True
         return result
 
     # ── Generate ──────────────────────────────────────────────────────────────
     context = build_financial_context(ticker, data)
-    raw     = await (_call_anthropic(context) if provider == "anthropic" else _call_openai(context))
+    callers = {"anthropic": _call_anthropic, "openai": _call_openai}
+    raw     = await callers[provider](context, api_key)
     raw     = _strip_fences(raw)
 
     result: dict = json.loads(raw)
@@ -248,6 +285,7 @@ async def generate_ai_insights(
     result["generated_at"] = datetime.now(timezone.utc).isoformat()
     result["model"]        = model_id
     result["provider"]     = provider
+    result["available"]    = True
     result["_source"]      = "generated"
 
     await cache.set(key, json.dumps(result), AI_INSIGHT_TTL)

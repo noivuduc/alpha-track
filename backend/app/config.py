@@ -1,6 +1,9 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import Literal
+
+_ROOT_DIR = Path(__file__).resolve().parents[2]  # backend/app/config.py → backend/
 
 class Settings(BaseSettings):
     APP_NAME:    str = "AlphaDesk"
@@ -19,6 +22,9 @@ class Settings(BaseSettings):
 
     FINANCIALDATASETS_API_KEY:  str = ""
     FINANCIALDATASETS_BASE_URL: str = "https://api.financialdatasets.ai"
+
+    OPENAI_API_KEY:    str = ""
+    ANTHROPIC_API_KEY: str = ""
 
     # ── Cache TTLs (seconds) ──────────────────────────────────────────────
     # Real-time / high-churn
@@ -82,8 +88,13 @@ class Settings(BaseSettings):
     ]
 
     class Config:
-        env_file = ".env"
+        env_file = (
+            str(_ROOT_DIR.parent / ".env"),  # project root: alphatrack/.env
+            str(_ROOT_DIR / ".env"),          # backend dir:  alphatrack/backend/.env
+            ".env",                           # CWD fallback
+        )
         case_sensitive = True
+        extra = "ignore"
 
 @lru_cache()
 def get_settings() -> Settings:

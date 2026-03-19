@@ -41,7 +41,9 @@ services:
       dockerfile: Dockerfile
     container_name: alphadesk_backend
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - ./backend/.env
+      - ./backend/.env.docker
     ports:
       - "8000:8000"
     depends_on:
@@ -59,7 +61,7 @@ services:
       dockerfile: Dockerfile
     container_name: alphadesk_frontend
     restart: unless-stopped
-    env_file: .env
+    env_file: ./frontend/.env
     ports:
       - "3000:3000"
     depends_on:

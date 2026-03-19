@@ -37,7 +37,7 @@ from app.services.peer_service  import get_peer_symbols, yf_peer_metrics_sync
 from app.services.trend_service  import build_trends
 from app.services.anomaly_service import detect_anomalies
 from app.services.insights        import compute_insights
-from app.services.ai_insights     import generate_ai_insights, ai_cache_key, PROVIDER_MODELS
+from app.services.ai_insights     import generate_ai_insights, ai_cache_key, _get_available_provider
 from app.services.segment_service import validate_segments
 
 log = logging.getLogger(__name__)
@@ -235,28 +235,26 @@ def _validated_segments(segments_r: dict, sym: str) -> list:
 # ── AI insights ───────────────────────────────────────────────────────────────
 
 async def get_ai_insights(
-    sym:      str,
-    provider: str,
-    force:    bool,
-    cache:    Cache,
+    sym:   str,
+    force: bool,
+    cache: Cache,
 ) -> dict:
     """
-    Return AI-generated investment insights for *sym* from *provider*.
+    Return AI-generated investment insights for *sym*.
 
-    Reads research data from the 1-hour research cache — requires research
-    page to have been loaded first (or workers to have pre-populated it).
+    Provider is auto-selected by the backend based on configured API keys.
+    If no keys are configured, returns a response with available=False.
+    Reads research data from the 1-hour research cache.
     """
-    if provider not in PROVIDER_MODELS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown provider '{provider}'. Use 'anthropic' or 'openai'.",
-        )
+    resolved = _get_available_provider()
 
-    if not force:
-        cached_ai = await cache.get(ai_cache_key(sym, provider))  # type: ignore[arg-type]
+    if not force and resolved:
+        provider = resolved[0]
+        cached_ai = await cache.get(ai_cache_key(sym, provider))
         if cached_ai:
             result = json.loads(cached_ai)
-            result["_source"] = "cache"
+            result["_source"]   = "cache"
+            result["available"] = True
             return result
 
     research_raw = await cache.get(research_cache_key(sym))
@@ -267,7 +265,7 @@ async def get_ai_insights(
         )
 
     research_data = json.loads(research_raw)
-    return await generate_ai_insights(sym, research_data, cache, provider=provider)  # type: ignore[arg-type]
+    return await generate_ai_insights(sym, research_data, cache)
 
 
 # ── yfinance sync helpers (imported by financial_data_service too) ────────────
