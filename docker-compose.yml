@@ -55,6 +55,46 @@ services:
       - ./backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
+  worker:
+    build:
+      context: .
+      dockerfile: pipeline/Dockerfile
+    container_name: alphadesk_worker
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+      - ./backend/.env.docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/workspace/backend
+      - ./pipeline:/workspace/pipeline
+    command: arq pipeline_worker.worker.WorkerSettings
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: pipeline/Dockerfile
+    container_name: alphadesk_dashboard
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+      - ./backend/.env.docker
+    ports:
+      - "9000:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/workspace/backend
+      - ./pipeline:/workspace/pipeline
+    command: uvicorn pipeline_worker.dashboard.app:app --host 0.0.0.0 --port 9000
+
   frontend:
     build:
       context: ./frontend

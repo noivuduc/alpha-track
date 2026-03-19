@@ -46,14 +46,39 @@ python3 -m venv .venv 2>/dev/null || true
 source .venv/bin/activate
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
+pip install -q -r "$SCRIPT_DIR/pipeline/requirements.txt"
 info "Python deps installed ✓"
+
+info "Running database migrations..."
+DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
+  alembic upgrade head
+info "Migrations applied ✓"
 
 info "Starting FastAPI backend on http://localhost:8000 ..."
 DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
 REDIS_URL="redis://:changeme@localhost:6379/0" \
   uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
+
 cd "$SCRIPT_DIR"
+
+# ── Pipeline Worker (ARQ) — standalone service ────────────────────────────────
+info "Starting ARQ pipeline worker..."
+PYTHONPATH="$SCRIPT_DIR/backend:$SCRIPT_DIR/pipeline" \
+DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
+REDIS_URL="redis://:changeme@localhost:6379/0" \
+  arq pipeline_worker.worker.WorkerSettings &
+WORKER_PID=$!
+info "Pipeline worker started (PID $WORKER_PID) ✓"
+
+# ── Pipeline Dashboard ────────────────────────────────────────────────────────
+info "Starting pipeline dashboard on http://localhost:9000 ..."
+PYTHONPATH="$SCRIPT_DIR/backend:$SCRIPT_DIR/pipeline" \
+DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
+REDIS_URL="redis://:changeme@localhost:6379/0" \
+  uvicorn pipeline_worker.dashboard.app:app --host 0.0.0.0 --port 9000 &
+DASHBOARD_PID=$!
+info "Dashboard started (PID $DASHBOARD_PID) ✓"
 
 # ── Frontend (Next.js) ────────────────────────────────────────────────────────
 if [[ "$1" != "--no-frontend" ]] && command -v node >/dev/null 2>&1; then
@@ -68,17 +93,19 @@ fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-info "╔════════════════════════════════════════╗"
-info "║         AlphaDesk is running!          ║"
-info "╠════════════════════════════════════════╣"
-info "║  Frontend  →  http://localhost:3000    ║"
-info "║  API docs  →  http://localhost:8000/docs ║"
-info "║  Health    →  http://localhost:8000/health ║"
-info "╚════════════════════════════════════════╝"
+info "╔═══════════════════════════════════════════╗"
+info "║          AlphaDesk is running!           ║"
+info "╠═══════════════════════════════════════════╣"
+info "║  Frontend   →  http://localhost:3000     ║"
+info "║  API docs   →  http://localhost:8000/docs║"
+info "║  Dashboard  →  http://localhost:9000     ║"
+info "║  Health     →  http://localhost:8000/health ║"
+info "║  Pipeline   →  ARQ worker (background)   ║"
+info "╚═══════════════════════════════════════════╝"
 echo ""
 info "Press Ctrl+C to stop all services."
 
 # Cleanup on exit
-trap 'info "Shutting down..."; kill $BACKEND_PID 2>/dev/null; kill $FRONTEND_PID 2>/dev/null; docker compose stop postgres redis; info "Done."' INT TERM
+trap 'info "Shutting down..."; kill $BACKEND_PID 2>/dev/null; kill $WORKER_PID 2>/dev/null; kill $DASHBOARD_PID 2>/dev/null; kill $FRONTEND_PID 2>/dev/null; docker compose stop postgres redis; info "Done."' INT TERM
 
 wait $BACKEND_PID

@@ -24,7 +24,7 @@ from app.cost_tracker import init_request_cost
 from app.database import engine, init_redis, close_redis, Base, get_cache
 from app.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.routers import auth, portfolio, market, admin, research, search
-from app.workers import seed_tracked_tickers_from_db, start_all_workers
+from app.pipeline.registry import seed_tracked_tickers_from_db
 
 settings = get_settings()
 
@@ -71,26 +71,14 @@ async def lifespan(app: FastAPI):
     else:
         log.info("db_tables_skipped", extra={"note": "production — ensure alembic upgrade head was run"})
 
-    # Seed tracked tickers from existing portfolio positions + watchlist
+    # Seed tracked tickers so pipeline worker has a universe to process
     await seed_tracked_tickers_from_db()
 
-    # Start background workers with crash detection
-    worker_tasks = start_all_workers()
-    for task in worker_tasks:
-        task.add_done_callback(
-            lambda t: log.error("worker_crashed", extra={"error": str(t.exception())})
-            if not t.cancelled() and t.exception() else None
-        )
-    log.info("workers_started", extra={"count": len(worker_tasks)})
+    log.info("app_ready", extra={"note": "read-only mode — workers run in separate ARQ process"})
 
     yield
 
     # Graceful shutdown
-    import asyncio
-    for task in worker_tasks:
-        task.cancel()
-    await asyncio.gather(*worker_tasks, return_exceptions=True)
-    log.info("workers_stopped")
     await close_redis()
     await engine.dispose()
     log.info("shutdown_complete")

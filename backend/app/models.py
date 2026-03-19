@@ -229,6 +229,9 @@ class TrackedTicker(Base):
     Populated from: portfolio positions, watchlists, research page visits.
 
     priority: 3=portfolio (highest), 2=watchlist, 1=research
+
+    Refresh timestamps let pipeline workers decide what to refresh next
+    without re-querying each cache layer.
     """
     __tablename__ = "tracked_tickers"
 
@@ -238,7 +241,30 @@ class TrackedTicker(Base):
     )
     priority:     Mapped[int]      = mapped_column(Integer, default=1, nullable=False)
     source:       Mapped[str]      = mapped_column(String(20), default="research", nullable=False)
-    # "portfolio" | "watchlist" | "research"
+
+    last_price_refresh:   Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_history_refresh: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_news_refresh:    Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ── Ticker News (pipeline-populated, read by app) ─────────────────────────────
+class TickerNews(Base):
+    """
+    Persistent news storage populated by the pipeline news worker.
+    The app reads from here instead of calling yfinance on the request path.
+    """
+    __tablename__ = "ticker_news"
+    __table_args__ = (
+        UniqueConstraint("ticker", "url", name="uq_ticker_news_url"),
+    )
+
+    id:         Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticker:     Mapped[str]       = mapped_column(String(20), nullable=False, index=True)
+    headline:   Mapped[str]       = mapped_column(Text, nullable=False)
+    source:     Mapped[str]       = mapped_column(String(200), default="")
+    url:        Mapped[str]       = mapped_column(Text, default="")
+    published:  Mapped[str]       = mapped_column(String(20), default="")
+    fetched_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ── API usage log (TimescaleDB hypertable) ────────────────────────────────────

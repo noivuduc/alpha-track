@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from app.services.data_service import DataService
+from app.services.data_reader import DataReader
 from app.services.portfolio_analytics.portfolio_metrics import (
     compute_snapshot,
     build_price_lookup,
@@ -796,7 +796,7 @@ def _positions_to_lots(positions: list) -> list[dict]:
 
 async def run_portfolio_analysis(
     positions: list,
-    ds:        DataService,
+    reader:    DataReader,
     cache,
     portfolio_id: str,
     force:        bool = False,
@@ -818,19 +818,15 @@ async def run_portfolio_analysis(
     lots             = _positions_to_lots(positions)
     existing_tickers = list({lot["ticker"] for lot in lots})
 
-    # ── Parallel data fetch ───────────────────────────────────────────────────
+    # ── Read data from cache (no external API calls) ───────────────────────────
     async def _hist(t: str):
-        try:
-            data = await ds.get_price_history(t, period="1y", interval="1d")
-            return t, data
-        except Exception as e:
-            log.warning("analysis: history failed for %s: %s", t, e)
-            return t, []
+        data = await reader.get_price_history(t, period="1y", interval="1d")
+        return t, data or []
 
     async def _sector(t: str) -> tuple[str, str | None]:
         try:
-            facts = await ds.get_company_facts(t)
-            sec   = (facts.get("company_facts") or {}).get("sector")
+            facts = await reader.get_company_facts(t)
+            sec   = ((facts or {}).get("company_facts") or {}).get("sector")
             return t, sec
         except Exception:
             return t, None
@@ -838,7 +834,7 @@ async def run_portfolio_analysis(
     hist_results, sector_results, prices = await asyncio.gather(
         asyncio.gather(*[_hist(t) for t in existing_tickers + ["SPY"]]),
         asyncio.gather(*[_sector(t) for t in existing_tickers]),
-        ds.get_prices_bulk(existing_tickers),
+        reader.get_prices_bulk(existing_tickers),
     )
 
     histories  = {t: d for t, d in hist_results if d}

@@ -33,7 +33,7 @@ import logging
 
 import numpy as np
 
-from app.services.data_service import DataService
+from app.services.data_reader import DataReader
 from app.services.portfolio_analytics.portfolio_metrics import (
     compute_snapshot,
     build_price_lookup,
@@ -202,7 +202,7 @@ async def simulate_add_position(
     positions:      list,
     new_ticker:     str,
     new_weight_pct: float,
-    ds:             DataService,
+    reader:         DataReader,
     benchmark:      str = "SPY",
 ) -> dict:
     """
@@ -224,18 +224,14 @@ async def simulate_add_position(
     existing_tickers = list({lot["ticker"] for lot in lots})
     all_tickers      = list({*existing_tickers, new_ticker})
 
-    # ── Step 2: Fetch price history for all tickers + benchmark ───────────────
+    # ── Step 2: Read price history from cache (no external calls) ───────────
     fetch_tickers = list({*all_tickers, benchmark, "SPY", "QQQ"})
 
     async def _hist(t: str):
-        try:
-            data = await ds.get_price_history(t, period="1y", interval="1d")
-            return t, data
-        except Exception as e:
-            log.warning("simulate: history fetch failed for %s: %s", t, e)
-            return t, []
+        data = await reader.get_price_history(t, period="1y", interval="1d")
+        return t, data or []
 
-    raw      = await asyncio.gather(*[_hist(t) for t in fetch_tickers])
+    raw       = await asyncio.gather(*[_hist(t) for t in fetch_tickers])
     histories = {t: d for t, d in raw if d}
 
     # ── Step 3: Align calendar + build price lookup ────────────────────────────
@@ -349,8 +345,7 @@ async def simulate_add_position(
     corr = pearson_corr(new_rets_for_corr, before_rets)
 
     # ── Step 11: Sector exposure ───────────────────────────────────────────────
-    # Current market-value weights for sector allocation
-    prices = await ds.get_prices_bulk(all_tickers)
+    prices = await reader.get_prices_bulk(all_tickers)
     mv = {
         pos.ticker: float(pos.shares) * prices.get(pos.ticker, {}).get(
             "price", float(pos.cost_basis)
@@ -364,8 +359,8 @@ async def simulate_add_position(
 
     async def _sector(t: str) -> tuple[str, str | None]:
         try:
-            facts  = await ds.get_company_facts(t)
-            sector = (facts.get("company_facts") or {}).get("sector")
+            facts = await reader.get_company_facts(t)
+            sector = ((facts or {}).get("company_facts") or {}).get("sector")
             return t, sector
         except Exception:
             return t, None

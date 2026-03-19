@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline Dashboard - AlphaDesk</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242836;
+      --border: #2e3348;
+      --text: #e4e7f0;
+      --text-muted: #8b90a5;
+      --accent: #6366f1;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #eab308;
+      --blue: #3b82f6;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 18px; font-weight: 600; }
+    .header h1 span { color: var(--accent); }
+    .header-meta { display: flex; gap: 16px; align-items: center; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .status-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.red { background: var(--red); box-shadow: 0 0 6px var(--red); }
+    .status-dot.yellow { background: var(--yellow); }
+
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .stat-card .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .value.green { color: var(--green); }
+    .stat-card .value.blue { color: var(--blue); }
+    .stat-card .value.yellow { color: var(--yellow); }
+    .stat-card .value.accent { color: var(--accent); }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-header h2 { font-size: 14px; font-weight: 600; }
+    .panel-body { padding: 0; max-height: 400px; overflow-y: auto; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px 16px; color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; background: var(--surface2); position: sticky; top: 0; }
+    td { padding: 10px 16px; border-top: 1px solid var(--border); }
+    tr:hover td { background: rgba(99, 102, 241, 0.05); }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-green { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge-blue { background: rgba(59,130,246,0.15); color: var(--blue); }
+    .badge-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
+    .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
+
+    .ticker-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 16px;
+    }
+    .ticker-chip {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    .auto-refresh {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .empty { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+    .refresh-btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .refresh-btn:hover { opacity: 0.9; }
+
+    .full-width { margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1><span>AlphaDesk</span> Pipeline Dashboard</h1>
+    <div class="header-meta">
+      <div class="auto-refresh">
+        <span class="status-dot green" id="heartbeat"></span>
+        <span id="lastUpdate">Loading...</span>
+      </div>
+      <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- Stats Cards -->
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card"><div class="label">Queue Depth</div><div class="value blue" id="queueDepth">-</div></div>
+      <div class="stat-card"><div class="label">Active Jobs</div><div class="value yellow" id="activeJobs">-</div></div>
+      <div class="stat-card"><div class="label">Completed Jobs</div><div class="value green" id="completedJobs">-</div></div>
+      <div class="stat-card"><div class="label">Tracked Tickers</div><div class="value accent" id="trackedTickers">-</div></div>
+      <div class="stat-card"><div class="label">Redis Memory</div><div class="value" id="redisMemory">-</div></div>
+      <div class="stat-card"><div class="label">Worker Status</div><div class="value green" id="workerStatus">-</div></div>
+    </div>
+
+    <!-- Queued Jobs + Cron Schedules -->
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-header"><h2>Queued Jobs</h2><span class="badge badge-blue" id="queueCount">0</span></div>
+        <div class="panel-body">
+          <table>
+            <thead><tr><th>Job ID</th><th>Function</th><th>Scheduled</th><th>Status</th></tr></thead>
+            <tbody id="queuedBody"><tr><td colspan="4" class="empty">No queued jobs</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h2>Cron Schedules</h2></div>
+        <div class="panel-body">
+          <table>
+            <thead><tr><th>Task</th><th>Hour</th><th>Minute</th><th>Timeout</th></tr></thead>
+            <tbody id="cronBody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent Results -->
+    <div class="panel full-width">
+      <div class="panel-header"><h2>Recent Job Results</h2><span class="badge badge-green" id="resultCount">0</span></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>Job ID</th><th>Function</th><th>Success</th><th>Duration</th><th>Result</th></tr></thead>
+          <tbody id="resultsBody"><tr><td colspan="5" class="empty">No results yet</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tracked Tickers -->
+    <div class="panel full-width">
+      <div class="panel-header"><h2>Tracked Tickers</h2></div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>Ticker</th><th>Source</th><th>Priority</th><th>Last Price</th><th>Last History</th><th>Last News</th></tr></thead>
+          <tbody id="tickerBody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+
+    async function fetchJSON(url) {
+      try {
+        const res = await fetch(API + url);
+        return await res.json();
+      } catch (e) {
+        console.error(`Fetch error ${url}:`, e);
+        return null;
+      }
+    }
+
+    function timeAgo(iso) {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      const now = new Date();
+      const secs = Math.floor((now - d) / 1000);
+      if (secs < 60) return `${secs}s ago`;
+      if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+      if (secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+      return `${Math.floor(secs/86400)}d ago`;
+    }
+
+    function shortId(id) {
+      if (!id) return '-';
+      return id.length > 20 ? id.slice(0, 8) + '...' : id;
+    }
+
+    async function loadOverview() {
+      const data = await fetchJSON('/api/overview');
+      if (!data) return;
+      document.getElementById('queueDepth').textContent = data.queue_depth;
+      document.getElementById('activeJobs').textContent = data.active_jobs;
+      document.getElementById('completedJobs').textContent = data.stored_results;
+      document.getElementById('trackedTickers').textContent = data.tracked_tickers;
+    }
+
+    async function loadHealth() {
+      const data = await fetchJSON('/api/health');
+      if (!data) {
+        document.getElementById('workerStatus').textContent = 'Offline';
+        document.getElementById('workerStatus').className = 'value red';
+        document.getElementById('heartbeat').className = 'status-dot red';
+        return;
+      }
+      const status = data.status === 'healthy' ? 'Online' : 'Running';
+      document.getElementById('workerStatus').textContent = status;
+      document.getElementById('workerStatus').className = 'value green';
+    }
+
+    async function loadRedis() {
+      const data = await fetchJSON('/api/redis/info');
+      if (!data) return;
+      document.getElementById('redisMemory').textContent = data.memory?.used_memory_human || '-';
+    }
+
+    async function loadQueued() {
+      const data = await fetchJSON('/api/jobs/queued');
+      const tbody = document.getElementById('queuedBody');
+      document.getElementById('queueCount').textContent = data?.length || 0;
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No queued jobs</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.map(j => `
+        <tr>
+          <td><code>${shortId(j.job_id)}</code></td>
+          <td>${j.function || '-'}</td>
+          <td>${timeAgo(j.scheduled_at)}</td>
+          <td><span class="badge badge-blue">${j.status}</span></td>
+        </tr>
+      `).join('');
+    }
+
+    async function loadResults() {
+      const data = await fetchJSON('/api/jobs/results');
+      const tbody = document.getElementById('resultsBody');
+      document.getElementById('resultCount').textContent = data?.length || 0;
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">No results yet</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.map(j => {
+        const success = j.success === true;
+        const badge = success ? 'badge-green' : (j.success === false ? 'badge-red' : 'badge-yellow');
+        const label = success ? 'OK' : (j.success === false ? 'FAIL' : '?');
+        const dur = j.duration_ms ? `${j.duration_ms}ms` : '-';
+        return `
+          <tr>
+            <td><code>${shortId(j.job_id)}</code></td>
+            <td>${j.function || '-'}</td>
+            <td><span class="badge ${badge}">${label}</span></td>
+            <td>${dur}</td>
+            <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${j.result || j.raw_preview || '-'}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function loadCron() {
+      const data = await fetchJSON('/api/cron');
+      const tbody = document.getElementById('cronBody');
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No cron jobs configured</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.map(c => `
+        <tr>
+          <td><strong>${c.name}</strong></td>
+          <td><code>${c.hour}</code></td>
+          <td><code>${c.minute}</code></td>
+          <td>${c.timeout}s</td>
+        </tr>
+      `).join('');
+    }
+
+    async function loadTickers() {
+      const data = await fetchJSON('/api/tickers');
+      const tbody = document.getElementById('tickerBody');
+      if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">No tracked tickers</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.map(t => `
+        <tr>
+          <td><strong>${t.ticker}</strong></td>
+          <td><span class="badge badge-blue">${t.source || '-'}</span></td>
+          <td>${t.priority || '-'}</td>
+          <td>${timeAgo(t.last_price_refresh)}</td>
+          <td>${timeAgo(t.last_history_refresh)}</td>
+          <td>${timeAgo(t.last_news_refresh)}</td>
+        </tr>
+      `).join('');
+    }
+
+    async function refreshAll() {
+      await Promise.all([
+        loadOverview(),
+        loadHealth(),
+        loadRedis(),
+        loadQueued(),
+        loadResults(),
+        loadCron(),
+        loadTickers(),
+      ]);
+      document.getElementById('lastUpdate').textContent =
+        'Updated ' + new Date().toLocaleTimeString();
+    }
+
+    refreshAll();
+    setInterval(refreshAll, 10000);
+  </script>
+</body>
+</html>

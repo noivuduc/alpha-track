@@ -1,12 +1,16 @@
-"""Portfolio, positions, transactions, and watchlist endpoints."""
-import asyncio
+"""Portfolio, positions, transactions, and watchlist endpoints.
+
+Read-only data access: all market data reads go through DataReader (Redis/PG).
+External API calls are handled exclusively by the pipeline worker.
+When data is unavailable (cold cache), returns 202 and the frontend polls.
+"""
 import json as _json
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,36 +26,21 @@ from app.schemas import (
     SimulateRequest, SimulateResponse,
     PortfolioAnalysisResponse,
 )
-from app.services.data_service import DataService
+from app.services.data_reader import DataReader
 from app.services import analytics as A
 from app.services.simulation_service import simulate_add_position
 from app.services.portfolio_analysis_service import run_portfolio_analysis
+from app.pipeline.enqueue import enqueue_seed_ticker, enqueue_seed_history
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
-# ── Concurrency + retry helpers ───────────────────────────────────────────────
-# Max parallel yfinance fetches — prevents IP rate-limiting from Yahoo
-_yf_semaphore = asyncio.Semaphore(8)
 
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(min=1, max=8),
-    retry=retry_if_exception_type(Exception),
-    reraise=True,
-)
-async def _fetch_history(ds, ticker: str, period: str) -> list:
-    """Fetch price history with retry. Used by analytics and analysis endpoints."""
-    return await ds.get_price_history(ticker, period=period, interval="1d")
-
-async def _get_ds(db: AsyncSession = Depends(get_db), cache: Cache = Depends(get_cache)):
-    async with DataService(cache=cache, db=db) as ds:
-        yield ds
+def _get_reader(cache: Cache = Depends(get_cache)) -> DataReader:
+    return DataReader(cache=cache)
 
 
 async def _invalidate_portfolio_cache(cache: Cache, portfolio_id: UUID) -> None:
-    """Delete all analytics/analysis cache keys for this portfolio."""
     for period in ("1mo", "3mo", "6mo", "ytd", "1y", "2y"):
         for bench in ("SPY", "QQQ", "IWM"):
             await cache.delete(f"analytics:{portfolio_id}:{period}:{bench}")
@@ -69,7 +58,6 @@ async def create_portfolio(body: PortfolioCreate, user: User = Depends(check_rat
     count_r = await db.execute(select(func.count()).where(Portfolio.user_id == user.id))
     await check_portfolio_quota(user, count_r.scalar_one())
 
-    # Auto-unset other defaults if this is default
     if body.is_default:
         existing = await db.execute(select(Portfolio).where(Portfolio.user_id == user.id, Portfolio.is_default == True))
         for p in existing.scalars():
@@ -109,7 +97,7 @@ async def get_metrics(
     portfolio_id: UUID,
     user: User       = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
-    ds: DataService  = Depends(_get_ds),
+    reader: DataReader = Depends(_get_reader),
 ):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
@@ -119,7 +107,7 @@ async def get_metrics(
     positions = pos_r.scalars().all()
 
     tickers = [pos.ticker for pos in positions]
-    prices  = await ds.get_prices_bulk(tickers) if tickers else {}
+    prices  = await reader.get_prices_bulk(tickers) if tickers else {}
 
     total_cost = total_value = day_gain = 0.0
     for pos in positions:
@@ -146,7 +134,7 @@ async def get_metrics(
     )
 
 # ── Portfolio Analytics ───────────────────────────────────────────────────────
-@router.get("/{portfolio_id}/analytics", response_model=PortfolioAnalytics)
+@router.get("/{portfolio_id}/analytics")
 async def get_analytics(
     portfolio_id: UUID,
     period:    str = Query("1y",  description="Period: 1mo 3mo 6mo ytd 1y 2y"),
@@ -154,32 +142,29 @@ async def get_analytics(
     force:     bool = Query(False, description="Bypass analytics cache"),
     user: User       = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
-    ds: DataService  = Depends(_get_ds),
+    reader: DataReader = Depends(_get_reader),
     cache: Cache     = Depends(get_cache),
 ):
     """
-    Full portfolio analytics: risk metrics, performance vs benchmarks,
-    drawdown history, and monthly returns heatmap.
-
-    Results are cached in Redis for 1 hour (bypass with force=true).
+    Full portfolio analytics — reads ALL data from cache/DB (no external calls).
+    Returns 202 if price history is not yet available (pipeline hasn't seeded).
     """
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
 
-    # force=True is admin-only to prevent cache-bypass abuse
     if force and not user.is_admin:
         force = False
 
     cache_key = f"analytics:{portfolio_id}:{period}:{benchmark}"
 
-    # ── L1: Redis cache ──────────────────────────────────────
+    # L1: Redis cache
     if not force:
         cached = await cache.get(cache_key)
         if cached:
             return _json.loads(cached)
 
-    # ── Fetch positions ──────────────────────────────────────
+    # Fetch positions
     pos_r = await db.execute(
         select(Position).where(
             Position.portfolio_id == portfolio_id,
@@ -192,42 +177,52 @@ async def get_analytics(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Portfolio has no open positions")
 
-    # ── Current prices ────────────────────────────────────────
+    # Read current prices from cache
     tickers = list({pos.ticker for pos in positions})
-    prices  = await ds.get_prices_bulk(tickers)
+    prices  = await reader.get_prices_bulk(tickers)
+
+    # Read price history from cache (populated by pipeline)
+    fetch_tickers = list({*tickers, benchmark, "QQQ"})
+    histories: dict[str, list] = {}
+    missing_history: list[str] = []
+
+    for t in fetch_tickers:
+        hist = await reader.get_price_history(t, period)
+        if hist:
+            histories[t] = hist
+        else:
+            missing_history.append(t)
+
+    # If any position tickers have no history, enqueue pipeline tasks and return 202
+    missing_positions = [t for t in tickers if t in missing_history]
+    if missing_positions:
+        for t in missing_history:
+            await enqueue_seed_history(t)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "preparing",
+                "detail": f"Price history loading for: {', '.join(missing_positions)}",
+                "portfolio_id": str(portfolio_id),
+            },
+        )
+
+    if not any(t in histories for t in tickers):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            "Could not fetch price history for any position")
 
     total_value = sum(
         float(pos.shares) * prices.get(pos.ticker, {}).get("price", float(pos.cost_basis))
         for pos in positions
     )
 
-    # ── Fetch price history in parallel (semaphore-throttled + retried) ──
-    fetch_tickers = list({*tickers, benchmark, "QQQ"})
-
-    async def _hist(t: str):
-        async with _yf_semaphore:
-            try:
-                data = await _fetch_history(ds, t, period)
-                return t, data
-            except Exception as e:
-                log.warning("analytics: history fetch failed for %s after retries: %s", t, e)
-                return t, []
-
-    raw = await asyncio.gather(*[_hist(t) for t in fetch_tickers])
-    histories = {t: d for t, d in raw if d}
-
-    if not any(t in histories for t in tickers):
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
-                            "Could not fetch price history for any position")
-
-    # ── Build market calendar + price lookup ─────────────────
+    # Build market calendar + price lookup
     ref = benchmark if benchmark in histories else (
           "SPY"     if "SPY"     in histories else tickers[0])
 
     dates, _aligned = A.align_series(histories, ref_ticker=ref)
     price_lookup    = A.build_price_lookup(histories)
 
-    # ── Build lots list (each position lot with opened_at) ────
     lots = [
         {
             "ticker":         pos.ticker,
@@ -240,10 +235,8 @@ async def get_analytics(
         for pos in positions
     ]
 
-    # ── Run comprehensive analytics engine ───────────────────
     result_data = A.compute_engine(price_lookup, lots, dates, benchmark=ref)
 
-    # ── Value metrics (consistent with /metrics endpoint) ────
     total_cost = sum(float(p.shares) * float(p.cost_basis) for p in positions)
     total_gain = total_value - total_cost
     day_gain   = sum(
@@ -251,17 +244,11 @@ async def get_analytics(
         for p in positions
     )
 
-    # ── Position summary + news (parallel) ───────────────────
     position_summary = A.compute_position_summary(positions, prices, histories)
 
-    async def _news(t: str) -> list[dict]:
-        try:
-            return await ds.get_news(t)
-        except Exception as e:
-            log.warning("analytics: news fetch failed for %s: %s", t, e)
-            return []
-
-    news_batches = await asyncio.gather(*[_news(t) for t in tickers])
+    # Read news from cache/DB (populated by pipeline)
+    import asyncio
+    news_batches = await asyncio.gather(*[reader.get_news(t) for t in tickers])
     all_news = sorted(
         [item for batch in news_batches for item in batch],
         key=lambda n: n.get("date", ""),
@@ -283,15 +270,13 @@ async def get_analytics(
         "portfolio_news":   all_news,
     }
 
-    # ── Cache TTL: degraded results expire faster ──────────────────────────
-    # "status" is a top-level key in compute_engine output, not inside "meta"
     _engine_status = result_data.get("status", "ok")
     if _engine_status in ("insufficient_data", "partial"):
-        ttl = 300          # 5 min — let user retry soon
+        ttl = 300
     elif len(positions) <= 2:
-        ttl = 900          # 15 min — small portfolios change value fast
+        ttl = 900
     else:
-        ttl = 1800         # 30 min (reduced from 1 hr to limit staleness)
+        ttl = 1800
     await cache.set(cache_key, _json.dumps(response), ttl)
     return response
 
@@ -303,20 +288,13 @@ async def get_portfolio_analysis(
     force:       bool        = Query(False, description="Bypass 15-min cache"),
     user: User               = Depends(check_rate_limit),
     db: AsyncSession         = Depends(get_db),
-    ds: DataService          = Depends(_get_ds),
+    reader: DataReader       = Depends(_get_reader),
     cache: Cache             = Depends(get_cache),
 ):
-    """
-    Portfolio decision engine: health score, rebalancing suggestions,
-    and correlation clusters — all computed from live TWR returns.
-
-    Results cached 15 minutes (bypass with force=true).
-    """
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
 
-    # force=True is admin-only to prevent cache-bypass abuse
     if force and not user.is_admin:
         force = False
 
@@ -335,7 +313,7 @@ async def get_portfolio_analysis(
 
     return await run_portfolio_analysis(
         positions    = positions,
-        ds           = ds,
+        reader       = reader,
         cache        = cache,
         portfolio_id = str(portfolio_id),
         force        = force,
@@ -350,14 +328,8 @@ async def simulate_portfolio(
     benchmark: str          = Query("SPY", description="Benchmark for beta/alpha"),
     user: User              = Depends(check_rate_limit),
     db: AsyncSession        = Depends(get_db),
-    ds: DataService         = Depends(_get_ds),
+    reader: DataReader      = Depends(_get_reader),
 ):
-    """
-    Simulate adding a new position at a given portfolio weight.
-
-    Returns before/after risk metrics, sector exposure delta, and AI-style
-    plain-English insights comparing the two portfolios.
-    """
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
@@ -380,7 +352,7 @@ async def simulate_portfolio(
             positions      = positions,
             new_ticker     = body.ticker,
             new_weight_pct = body.weight_pct,
-            ds             = ds,
+            reader         = reader,
             benchmark      = benchmark,
         )
     except ValueError as exc:
@@ -397,7 +369,7 @@ async def list_positions(
     offset: int  = Query(0,   ge=0,           description="Skip N results"),
     user: User       = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
-    ds: DataService  = Depends(_get_ds),
+    reader: DataReader = Depends(_get_reader),
 ):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
@@ -412,7 +384,7 @@ async def list_positions(
     positions = pos_r.scalars().all()
 
     tickers = [pos.ticker for pos in positions]
-    prices  = await ds.get_prices_bulk(tickers) if tickers else {}
+    prices  = await reader.get_prices_bulk(tickers) if tickers else {}
 
     total_value = sum(float(pos.shares) * prices.get(pos.ticker, {}).get("price", float(pos.cost_basis)) for pos in positions)
 
@@ -429,8 +401,6 @@ async def list_positions(
         resp.gain_loss     = round(gain, 2)
         resp.gain_loss_pct = round(gain / cost_val * 100 if cost_val else 0.0, 4)
         resp.weight_pct    = round(current_value / total_value * 100 if total_value else 0.0, 4)
-        # contribution_to_portfolio_pct = pnl / total_portfolio_value × 100
-        # sum across all positions == total_gain / total_value × 100
         resp.contribution_to_portfolio_pct = round(
             gain / total_value * 100 if total_value else 0.0, 4
         )
@@ -455,6 +425,9 @@ async def add_position(
     db.add(pos)
     await db.flush()
     await _invalidate_portfolio_cache(cache, portfolio_id)
+
+    # Enqueue pipeline seed for the new ticker
+    await enqueue_seed_ticker(body.ticker, source="portfolio")
     return pos
 
 @router.patch("/{portfolio_id}/positions/{pos_id}", response_model=PositionResponse)
@@ -558,11 +531,11 @@ async def delete_transaction(
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────
 @router.get("/watchlist/", response_model=list[WatchlistResponse])
-async def list_watchlist(user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db), ds: DataService = Depends(_get_ds)):
+async def list_watchlist(user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db), reader: DataReader = Depends(_get_reader)):
     result = await db.execute(select(WatchlistItem).where(WatchlistItem.user_id == user.id))
     items  = result.scalars().all()
     tickers = [i.ticker for i in items]
-    prices  = await ds.get_prices_bulk(tickers) if tickers else {}
+    prices  = await reader.get_prices_bulk(tickers) if tickers else {}
     out = []
     for item in items:
         r = WatchlistResponse.model_validate(item)
@@ -575,6 +548,7 @@ async def add_to_watchlist(body: WatchlistCreate, user: User = Depends(check_rat
     item = WatchlistItem(user_id=user.id, **body.model_dump())
     db.add(item)
     await db.flush()
+    await enqueue_seed_ticker(body.ticker, source="watchlist")
     return item
 
 @router.delete("/watchlist/{item_id}", status_code=204)

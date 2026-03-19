@@ -59,7 +59,9 @@ export default function DashboardShell() {
   // ── Load analytics when portfolio or period changes ──────
   const loadAnalytics = useCallback((pid: string, p: Period, force = false) => {
     setAnalyticsLoading(true);
-    portApi.analytics(pid, p, force)
+    portApi.analytics(pid, p, force, () => {
+      // Called when backend returns 202 (data preparing) — keep loading state
+    })
       .then(setAnalytics)
       .catch(e => { console.error(e); setAnalytics(null); })
       .finally(() => setAnalyticsLoading(false));
