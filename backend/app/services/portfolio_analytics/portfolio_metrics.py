@@ -120,6 +120,8 @@ def compute_snapshot(
     port_values:  list[float],
     spy_returns:  list[float],
     label:        str = "",
+    *,
+    port_for_spy: list[float] | None = None,
 ) -> dict:
     """
     Compute all standard risk/return metrics from a daily return series.
@@ -146,6 +148,7 @@ def compute_snapshot(
         "sharpe": 0.0, "sortino": 0.0, "beta": 1.0, "alpha_pct": 0.0,
         "max_drawdown_pct": 0.0, "volatility_pct": 0.0,
         "annualized_return_pct": 0.0, "var_95_pct": 0.0,
+        "win_rate_pct": 0.0, "win_rate_excess_pct": 0.0,
     }
     if len(port_returns) < 5:
         log.debug("compute_snapshot [%s]: insufficient data (n=%d)", label, len(port_returns))
@@ -173,8 +176,9 @@ def compute_snapshot(
         s,
     )
 
-    b = beta(port_returns, spy_returns)  if spy_returns else 1.0
-    a = alpha(port_returns, spy_returns, b) if spy_returns else 0.0
+    _pr = port_for_spy if port_for_spy is not None else port_returns
+    b = beta(_pr, spy_returns)  if spy_returns else 1.0
+    a = alpha(_pr, spy_returns, b) if spy_returns else 0.0
 
     return {
         "sharpe":                round(s,                                    4),

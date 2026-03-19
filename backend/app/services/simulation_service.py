@@ -31,6 +31,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import numpy as np
+
 from app.services.data_service import DataService
 from app.services.portfolio_analytics.portfolio_metrics import (
     compute_snapshot,
@@ -173,6 +175,27 @@ def _ff_closes(
     return out
 
 
+# ── Date-return map helper ─────────────────────────────────────────────────────
+
+def _date_return_map(
+    prices: list[float],
+    dates:  list[str],
+) -> dict[str, float]:
+    """Build {date: daily_return} from a forward-filled price+date series.
+
+    Inline loop guarantees 1-to-1 dates[i] → return correspondence.
+    Avoids daily_returns() which silently skips entries when prev == 0,
+    breaking the date→return mapping.
+    """
+    if len(prices) < 2:
+        return {}
+    d2r: dict[str, float] = {}
+    for i in range(1, len(prices)):
+        if prices[i - 1] > 0:
+            d2r[dates[i]] = prices[i] / prices[i - 1] - 1.0
+    return d2r
+
+
 # ── Main simulation function ───────────────────────────────────────────────────
 
 async def simulate_add_position(
@@ -240,22 +263,33 @@ async def simulate_add_position(
     # days when new lots were added (cash-flow distortion).
     cash_flows  = build_cash_flows(lots, active_dates)
     before_rets = compute_twr_returns(portfolio_values, active_dates, cash_flows)
+    # NaN filter — mirrors compute_engine() so metrics are consistent
+    _raw  = np.asarray(before_rets, dtype=np.float64)
+    _mask = ~np.isnan(_raw)
+    before_rets  = _raw[_mask].tolist()
+    return_dates: list[str] = [
+        d for d, m in zip(active_dates[1:], _mask.tolist()) if m
+    ]
     before_vals = cumulative_series(before_rets)
 
     if len(before_rets) < 5:
         raise ValueError("Insufficient active trading days in portfolio history")
 
-    # ── Step 6: New ticker daily returns aligned to the SAME active_dates ─────
-    # Forward-fill so every date in active_dates has a price.
-    new_ticker_closes = _ff_closes(new_ticker, price_lookup, active_dates)
-    new_ticker_rets   = daily_returns(new_ticker_closes) if len(new_ticker_closes) >= 2 else []
-
-    # Pad / trim to match len(before_rets)
+    # ── Step 6: New ticker returns aligned BY DATE to return_dates ────────────
+    # Build a date→return map from the forward-filled price series so alignment
+    # is calendar-based, not positional (avoids mixing returns from different dates).
+    new_closes = _ff_closes(new_ticker, price_lookup, active_dates)
+    new_ff_dates: list[str] = []
+    _lp: float | None = None
+    for d in active_dates:
+        p = price_lookup.get(new_ticker, {}).get(d)
+        if p and p > 0:
+            _lp = p
+        if _lp is not None:
+            new_ff_dates.append(d)
+    new_d2r = _date_return_map(new_closes, new_ff_dates)
     n = len(before_rets)
-    new_rets_aligned: list[float] = [
-        new_ticker_rets[i] if i < len(new_ticker_rets) else 0.0
-        for i in range(n)
-    ]
+    new_rets_aligned: list[float] = [new_d2r.get(d, 0.0) for d in return_dates]
 
     # ── Step 7: "After" returns — weighted blend of TWR + simple ─────────────
     # after[i] = (1−w) × portfolio_twr[i]  +  w × new_ticker_daily[i]
@@ -268,19 +302,51 @@ async def simulate_add_position(
     ]
     after_vals = cumulative_series(after_rets)
 
-    # ── Step 8: SPY returns for beta/alpha (same window as active_dates) ──────
-    spy_closes = _ff_closes("SPY", price_lookup, active_dates)
-    spy_rets   = daily_returns(spy_closes) if len(spy_closes) >= 2 else []
+    # ── Step 8: SPY returns — date-aligned intersection ───────────────────────
+    # Build a date→return map for SPY so beta/alpha use the correct calendar
+    # dates, not a positional truncation with [:min(len,len)].
+    spy_closes_ff = _ff_closes("SPY", price_lookup, active_dates)
+    spy_ff_dates: list[str] = []
+    _lsp: float | None = None
+    for d in active_dates:
+        p = price_lookup.get("SPY", {}).get(d)
+        if p and p > 0:
+            _lsp = p
+        if _lsp is not None:
+            spy_ff_dates.append(d)
+    spy_d2r = _date_return_map(spy_closes_ff, spy_ff_dates)
+    # Intersect portfolio return dates with SPY return dates (before)
+    port_for_spy_b: list[float] = []
+    spy_aligned_b:  list[float] = []
+    for d, pr in zip(return_dates, before_rets):
+        if d in spy_d2r:
+            port_for_spy_b.append(pr)
+            spy_aligned_b.append(spy_d2r[d])
+    # Same intersection for after returns
+    port_for_spy_a: list[float] = []
+    spy_aligned_a:  list[float] = []
+    for d, ar in zip(return_dates, after_rets):
+        if d in spy_d2r:
+            port_for_spy_a.append(ar)
+            spy_aligned_a.append(spy_d2r[d])
 
     # ── Step 9: Compute snapshots via the SINGLE canonical function ────────────
-    # Both calls use compute_snapshot() from portfolio_metrics (SoT).
-    # Debug logs at level=DEBUG will show: n, mean_daily, ann_return, sharpe, etc.
-    before_snap = compute_snapshot(before_rets, before_vals, spy_rets, label="sim_before")
-    after_snap  = compute_snapshot(after_rets,  after_vals,  spy_rets, label="sim_after")
-    delta       = _delta(before_snap, after_snap)
+    # Full port_returns → Sharpe/Sortino/vol/VaR/win_rate (portfolio-only metrics).
+    # port_for_spy_* + spy_aligned_* → beta/alpha (properly date-aligned pairs).
+    before_snap = compute_snapshot(
+        before_rets, before_vals, spy_aligned_b,
+        label="sim_before", port_for_spy=port_for_spy_b,
+    )
+    after_snap = compute_snapshot(
+        after_rets, after_vals, spy_aligned_a,
+        label="sim_after", port_for_spy=port_for_spy_a,
+    )
+    delta = _delta(before_snap, after_snap)
 
     # ── Step 10: Correlation of new ticker with current portfolio ─────────────
-    corr = pearson_corr(new_ticker_rets, before_rets)
+    # Use date-aligned new-ticker returns (same calendar as return_dates)
+    new_rets_for_corr: list[float] = [new_d2r.get(d, 0.0) for d in return_dates]
+    corr = pearson_corr(new_rets_for_corr, before_rets)
 
     # ── Step 11: Sector exposure ───────────────────────────────────────────────
     # Current market-value weights for sector allocation

@@ -169,6 +169,8 @@ def cumulative_series(returns: list[float], base: float = 100.0) -> list[float]:
     cum = np.empty(len(r) + 1, dtype=np.float64)
     cum[0] = base
     cum[1:] = np.round(base * np.cumprod(1.0 + r), 6)
+    np.clip(cum, -1e15, 1e15, out=cum)
+    cum[~np.isfinite(cum)] = base
     return cum.tolist()
 
 

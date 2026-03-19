@@ -79,6 +79,15 @@ export default function DashboardShell() {
     loadAnalysis(selected.id);
   }, [selected, period, loadPositions, loadAnalytics, loadAnalysis]);
 
+  // Auto-force-refresh when cached analytics is stale (>10 min old)
+  useEffect(() => {
+    if (!analytics?.computed_at || !selected) return;
+    const ageMs = Date.now() - new Date(analytics.computed_at).getTime();
+    if (ageMs > 10 * 60 * 1000) {
+      loadAnalytics(selected.id, period, true);
+    }
+  }, [analytics?.computed_at, selected, period, loadAnalytics]);
+
   const handleRefresh = () => {
     if (!selected) return;
     loadPositions(selected.id);

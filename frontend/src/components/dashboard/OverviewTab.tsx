@@ -232,10 +232,10 @@ function ContributionSection({
           const ret       = returnMap.get(row.ticker);
           const isPos     = row.pnl_contribution >= 0;
           const barPct    = (Math.abs(row.pnl_contribution) / maxAbs) * 50;
-          const contribPct =
-            totalValue && totalValue > 0
-              ? (row.pnl_contribution / totalValue) * 100
-              : row.contribution_pct;
+          // Use backend-computed contribution_pct only.
+          // Never recompute from pnl_contribution/totalValue — the analytics
+          // price snapshot and live-price fetch are different points in time.
+          const contribPct = row.contribution_pct;
 
           return (
             <div

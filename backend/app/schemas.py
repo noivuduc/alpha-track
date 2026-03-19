@@ -96,9 +96,14 @@ class PositionResponse(BaseModel):
     # Enriched fields (not from DB, computed in endpoint)
     current_price:  float | None = None
     current_value:  float | None = None
-    gain_loss:      float | None = None
-    gain_loss_pct:  float | None = None
-    weight_pct:     float | None = None
+    # Simple unrealized P&L — cost-basis arithmetic, NOT time-weighted.
+    # Use analytics.risk_metrics.annualized_return_pct for TWR.
+    gain_loss:      float | None = None   # $ unrealized P&L
+    gain_loss_pct:  float | None = None   # % of cost basis
+    weight_pct:     float | None = None   # current value / portfolio value
+    # Contribution: pnl / total_portfolio_value × 100.
+    # sum(contribution_to_portfolio_pct) == total_gain / total_value × 100.
+    contribution_to_portfolio_pct: float | None = None
     model_config = {"from_attributes": True}
 
 # ── Transactions ──────────────────────────────────────────────────────────────
@@ -461,6 +466,8 @@ class SimulateSnapshot(BaseModel):
     volatility_pct:        float
     annualized_return_pct: float
     var_95_pct:            float
+    win_rate_pct:          float = 0.0
+    win_rate_excess_pct:   float = 0.0
 
 
 class SimulateDelta(BaseModel):
@@ -472,6 +479,8 @@ class SimulateDelta(BaseModel):
     volatility_pct:        float
     annualized_return_pct: float
     var_95_pct:            float
+    win_rate_pct:          float = 0.0
+    win_rate_excess_pct:   float = 0.0
 
 
 class SimulateResponse(BaseModel):

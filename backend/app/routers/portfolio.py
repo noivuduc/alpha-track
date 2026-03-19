@@ -48,6 +48,15 @@ async def _fetch_history(ds, ticker: str, period: str) -> list:
 def _get_ds(db: AsyncSession = Depends(get_db), cache: Cache = Depends(get_cache)) -> DataService:
     return DataService(cache=cache, db=db)
 
+
+async def _invalidate_portfolio_cache(cache: Cache, portfolio_id: UUID) -> None:
+    """Delete all analytics/analysis cache keys for this portfolio."""
+    for period in ("1mo", "3mo", "6mo", "ytd", "1y", "2y"):
+        for bench in ("SPY", "QQQ", "IWM"):
+            await cache.delete(f"analytics:{portfolio_id}:{period}:{bench}")
+    await cache.delete(f"portfolio_analysis:{portfolio_id}")
+
+
 # ── Portfolios ────────────────────────────────────────────────────────────────
 @router.get("/", response_model=list[PortfolioResponse])
 async def list_portfolios(user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db)):
@@ -273,8 +282,16 @@ async def get_analytics(
         "portfolio_news":   all_news,
     }
 
-    # ── Cache for 1 hour ────────────────────────────────────
-    await cache.set(cache_key, _json.dumps(response), 3600)
+    # ── Cache TTL: degraded results expire faster ──────────────────────────
+    # "status" is a top-level key in compute_engine output, not inside "meta"
+    _engine_status = result_data.get("status", "ok")
+    if _engine_status in ("insufficient_data", "partial"):
+        ttl = 300          # 5 min — let user retry soon
+    elif len(positions) <= 2:
+        ttl = 900          # 15 min — small portfolios change value fast
+    else:
+        ttl = 1800         # 30 min (reduced from 1 hr to limit staleness)
+    await cache.set(cache_key, _json.dumps(response), ttl)
     return response
 
 
@@ -409,15 +426,22 @@ async def list_positions(
         resp.current_price = current_price
         resp.current_value = round(current_value, 2)
         resp.gain_loss     = round(gain, 2)
-        resp.gain_loss_pct = round(gain / cost_val * 100 if cost_val else 0, 2)
-        resp.weight_pct    = round(current_value / total_value * 100 if total_value else 0, 2)
+        resp.gain_loss_pct = round(gain / cost_val * 100 if cost_val else 0.0, 4)
+        resp.weight_pct    = round(current_value / total_value * 100 if total_value else 0.0, 4)
+        # contribution_to_portfolio_pct = pnl / total_portfolio_value × 100
+        # sum across all positions == total_gain / total_value × 100
+        resp.contribution_to_portfolio_pct = round(
+            gain / total_value * 100 if total_value else 0.0, 4
+        )
         result.append(resp)
     return result
 
 @router.post("/{portfolio_id}/positions", response_model=PositionResponse, status_code=201)
 async def add_position(
     portfolio_id: UUID, body: PositionCreate,
-    user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db),
+    user: User       = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache     = Depends(get_cache),
 ):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
@@ -429,12 +453,15 @@ async def add_position(
     pos = Position(portfolio_id=portfolio_id, **body.model_dump())
     db.add(pos)
     await db.flush()
+    await _invalidate_portfolio_cache(cache, portfolio_id)
     return pos
 
 @router.patch("/{portfolio_id}/positions/{pos_id}", response_model=PositionResponse)
 async def update_position(
     portfolio_id: UUID, pos_id: UUID, body: PositionUpdate,
-    user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db),
+    user: User       = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache     = Depends(get_cache),
 ):
     pos = await db.get(Position, pos_id)
     if not pos or pos.portfolio_id != portfolio_id:
@@ -445,10 +472,16 @@ async def update_position(
 
     for k, v in body.model_dump(exclude_none=True).items():
         setattr(pos, k, v)
+    await _invalidate_portfolio_cache(cache, portfolio_id)
     return pos
 
 @router.delete("/{portfolio_id}/positions/{pos_id}", status_code=204)
-async def delete_position(portfolio_id: UUID, pos_id: UUID, user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db)):
+async def delete_position(
+    portfolio_id: UUID, pos_id: UUID,
+    user: User       = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache     = Depends(get_cache),
+):
     pos = await db.get(Position, pos_id)
     if not pos or pos.portfolio_id != portfolio_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
@@ -456,6 +489,7 @@ async def delete_position(portfolio_id: UUID, pos_id: UUID, user: User = Depends
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN)
     await db.delete(pos)
+    await _invalidate_portfolio_cache(cache, portfolio_id)
 
 # ── Transactions ──────────────────────────────────────────────────────────────
 @router.post("/{portfolio_id}/transactions", response_model=TransactionResponse, status_code=201)

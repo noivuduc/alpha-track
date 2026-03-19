@@ -15,17 +15,27 @@ import sqlalchemy as sa
 
 # revision identifiers
 revision = "001_prod_hardening"
-down_revision = None
+down_revision = "000_initial_schema"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Add is_admin column
-    op.add_column(
-        "users",
-        sa.Column("is_admin", sa.Boolean(), nullable=False, server_default="false"),
+    # 1. Add is_admin column — skip if already present (000_initial_schema
+    #    includes it for fresh deployments; this migration targets upgrades
+    #    from pre-000 databases only).
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='users' AND column_name='is_admin'"
+        )
     )
+    if not result.fetchone():
+        op.add_column(
+            "users",
+            sa.Column("is_admin", sa.Boolean(), nullable=False, server_default="false"),
+        )
 
     # 2. Nullify all existing api_key values — they are plaintext and
     #    incompatible with the new sha256-hash lookup. Users must regenerate.

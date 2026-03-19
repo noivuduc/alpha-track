@@ -8,7 +8,6 @@ without modification.
 # noqa: F401, F403
 from app.services.portfolio_analytics import (
     compute_engine,
-    compute_all,
     build_portfolio_returns,
     align_series,
     build_price_lookup,

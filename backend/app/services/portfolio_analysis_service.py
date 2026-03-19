@@ -868,19 +868,53 @@ async def run_portfolio_analysis(
 
     cash_flows   = build_cash_flows(lots, active_dates)
     port_returns = compute_twr_returns(portfolio_values, active_dates, cash_flows)
+    # NaN filter — mirrors compute_engine() so metrics are consistent
+    _raw  = np.asarray(port_returns, dtype=np.float64)
+    _mask = ~np.isnan(_raw)
+    port_returns = _raw[_mask].tolist()
+    return_dates: list[str] = [
+        d for d, m in zip(active_dates[1:], _mask.tolist()) if m
+    ]
     port_values  = cumulative_series(port_returns)
 
-    spy_closes  = [b["close"] for b in histories.get("SPY", [])]
-    spy_returns = daily_returns(spy_closes) if len(spy_closes) >= 2 else []
+    if len(port_returns) < 5:
+        return _empty_analysis(portfolio_id)
+
+    # SPY returns — date-aligned via date→return map (same as compute_engine)
+    spy_d2c     = price_lookup.get("SPY", {})
+    _last_spy:  float | None = None
+    spy_prices: list[float]  = []
+    spy_pdates: list[str]    = []
+    for d in active_dates:
+        p = spy_d2c.get(d)
+        if p and p > 0:
+            _last_spy = p
+        if _last_spy is not None:
+            spy_prices.append(_last_spy)
+            spy_pdates.append(d)
+    spy_d2r: dict[str, float] = {}
+    for i in range(1, len(spy_prices)):
+        if spy_prices[i - 1] > 0:
+            spy_d2r[spy_pdates[i]] = spy_prices[i] / spy_prices[i - 1] - 1.0
+    # Intersect portfolio return dates with SPY return dates
+    port_for_spy: list[float] = []
+    spy_aligned:  list[float] = []
+    for d, pr in zip(return_dates, port_returns):
+        if d in spy_d2r:
+            port_for_spy.append(pr)
+            spy_aligned.append(spy_d2r[d])
+    spy_returns = spy_aligned
 
     risk_metrics = compute_snapshot(
-        port_returns, port_values, spy_returns, label="analysis"
+        port_returns, port_values, spy_aligned,
+        label="analysis", port_for_spy=port_for_spy,
     )
 
-    # Per-ticker daily returns (for correlation)
+    # Per-ticker daily returns aligned to active_dates (for correlation)
     returns_matrix: dict[str, list[float]] = {}
     for ticker in existing_tickers:
-        closes = [b["close"] for b in histories.get(ticker, [])]
+        d2c    = price_lookup.get(ticker, {})
+        closes = [d2c[d] for d in active_dates if d in d2c and d2c[d] > 0]
         if len(closes) >= 2:
             returns_matrix[ticker] = daily_returns(closes)
 

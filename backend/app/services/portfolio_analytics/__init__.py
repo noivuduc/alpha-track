@@ -11,7 +11,6 @@ Public API re-exported here for convenient importing:
 # Core entry points used by the router
 from .engine import (
     compute_engine,
-    compute_all,
     build_portfolio_returns,
 )
 from .portfolio_reconstruction import align_series, build_price_lookup
@@ -23,7 +22,6 @@ from .constants import RF_ANNUAL, RF_DAILY, TRADING_YR, MONTHS
 __all__ = [
     # Engine
     "compute_engine",
-    "compute_all",
     "build_portfolio_returns",
     # Reconstruction
     "align_series",

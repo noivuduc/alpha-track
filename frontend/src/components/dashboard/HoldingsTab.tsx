@@ -58,14 +58,14 @@ interface EditForm {
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const COLS: { key: SortKey; label: string; align: "left" | "right" }[] = [
+const COLS: { key: SortKey; label: string; align: "left" | "right"; title?: string }[] = [
   { key: "ticker",        label: "Ticker",    align: "left"  },
   { key: "shares",        label: "Shares",    align: "right" },
   { key: "cost_basis",    label: "Avg Cost",  align: "right" },
   { key: "current_price", label: "Price",     align: "right" },
   { key: "current_value", label: "Mkt Value", align: "right" },
-  { key: "gain_loss",     label: "P&L",       align: "right" },
-  { key: "gain_loss_pct", label: "P&L %",     align: "right" },
+  { key: "gain_loss",     label: "Unreal P&L", align: "right", title: "Unrealized dollar gain/loss vs average cost" },
+  { key: "gain_loss_pct", label: "Simple Ret", align: "right", title: "Simple return on cost basis: (current − cost) / cost. Not time-weighted; differs from Annualized Return on Overview." },
   { key: "weight_pct",    label: "Weight",    align: "right" },
 ];
 
@@ -856,11 +856,18 @@ export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }:
   const [deletingPos, setDeletingPos] = useState<string | null>(null);
 
   // ── Contribution lookup ────────────────────────────────────────────────────
+  // Prefer analytics.contribution (compute_engine, TWR-consistent) when loaded.
+  // Fall back to position.contribution_to_portfolio_pct (same formula, live prices).
   const contributionMap = useMemo(() => {
     const m: Record<string, number> = {};
+    // Seed with position-level values as baseline
+    for (const p of data) {
+      if (p.contribution_to_portfolio_pct != null) m[p.ticker] = p.contribution_to_portfolio_pct;
+    }
+    // Override with analytics values (more accurate — price-history snapshot)
     for (const c of analytics?.contribution ?? []) m[c.ticker] = c.contribution_pct;
     return m;
-  }, [analytics]);
+  }, [analytics, data]);
 
   // ── Sort + filter ──────────────────────────────────────────────────────────
   const handleSort = (key: SortKey) => {
@@ -1028,9 +1035,10 @@ export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }:
                   <th
                     key={col.key}
                     onClick={() => handleSort(col.key)}
+                    title={col.title}
                     className={`px-4 py-3 text-xs font-semibold text-zinc-500 cursor-pointer hover:text-zinc-300 select-none transition-colors ${
                       col.align === "right" ? "text-right" : "text-left"
-                    }`}
+                    } ${col.title ? "underline decoration-dotted decoration-zinc-600 underline-offset-2" : ""}`}
                   >
                     <span className="inline-flex items-center gap-1">
                       {col.align === "right" && <SortIcon col={col.key} />}
@@ -1156,8 +1164,11 @@ export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }:
                   </td>
                   <td className={`px-4 py-3 text-right font-mono font-bold text-sm ${gainClass(totalGL)}`}>
                     <div>{totalGL >= 0 ? "+" : ""}{fmtK(totalGL)}</div>
-                    <div className={`text-[10px] font-normal ${gainClass(totalRetPct)}`}>
-                      {totalRetPct != null ? fmtPct(totalRetPct) : ""} return
+                    <div
+                      className={`text-[10px] font-normal ${gainClass(totalRetPct)}`}
+                      title="Simple return on cost basis. For time-weighted return see Overview → Annualized Return."
+                    >
+                      {totalRetPct != null ? fmtPct(totalRetPct) : ""} simple ret
                     </div>
                   </td>
                   <td colSpan={3} />
