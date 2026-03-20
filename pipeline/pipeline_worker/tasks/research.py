@@ -19,12 +19,38 @@ from app.services.segment_service import validate_segments
 
 log = logging.getLogger(__name__)
 
-_RESEARCH_CACHE_TTL = 3600
+_RESEARCH_CACHE_TTL = 21600   # 6 hours — individual datasets have their own cron refresh
 _ERROR_TTL          = 30
 
 
 def _research_cache_key(ticker: str) -> str:
     return f"research7:{ticker.upper()}"
+
+
+async def _build_snapshot_from_cache(cache: Cache, ticker: str) -> dict | None:
+    """
+    Try to build the price snapshot from the yfinance price cache (free)
+    instead of calling the paid FD /prices/snapshot/ endpoint.
+    Returns None if no cached price is available.
+    """
+    raw = await cache.get(f"price:{ticker.upper()}")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if not data.get("price"):
+            return None
+        return {
+            "snapshot": {
+                "ticker":             ticker.upper(),
+                "price":              data["price"],
+                "day_change":         data.get("change"),
+                "day_change_percent": data.get("change_pct"),
+                "time":               data.get("fetched_at"),
+            }
+        }
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return None
 
 def _lock_key(ticker: str) -> str:
     return f"fetch_lock:research:{ticker.upper()}"
@@ -38,11 +64,16 @@ async def fetch_research(ctx: dict, ticker: str) -> None:
     cache: Cache = ctx["cache"]
 
     try:
+        snapshot_r = await _build_snapshot_from_cache(cache, ticker)
+
         async with DataService(cache) as ds:
             peer_syms = await get_peer_symbols(ticker)
 
+            if not snapshot_r:
+                snapshot_r = await ds.get_price_snapshot(ticker)
+
             (
-                facts_r, snapshot_r, metrics_r,
+                facts_r, metrics_r,
                 fin_ann_r, fin_ttm_r, fin_q_r,
                 mh_ann_r, mh_q_r,
                 ownership_r, insider_raw,
@@ -50,7 +81,6 @@ async def fetch_research(ctx: dict, ticker: str) -> None:
                 news_raw, segments_r,
             ) = await asyncio.gather(
                 ds.get_company_facts(ticker),
-                ds.get_price_snapshot(ticker),
                 ds.get_metrics_snapshot(ticker),
                 ds.get_financials_annual(ticker),
                 ds.get_financials_ttm(ticker),

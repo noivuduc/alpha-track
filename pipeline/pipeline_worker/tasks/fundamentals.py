@@ -52,6 +52,8 @@ async def _refresh(sched: dict, cache: Cache) -> None:
             ds.get_metrics_history_annual(ticker,    force=True),
             ds.get_metrics_history_quarterly(ticker, force=True),
             ds.get_segmented_revenues(ticker,        force=True),
+            ds.get_metrics_snapshot(ticker,           force=True),
+            ds.get_institutional_ownership(ticker,    force=True),
             return_exceptions=True,
         )
 

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import SearchAutocomplete from "@/components/research/SearchAutocomplete";
+import MarketStatusBadge from "@/components/MarketStatusBadge";
 import { Portfolio } from "@/lib/api";
 
 const tierBadge: Record<string, string> = {
@@ -197,6 +198,9 @@ export default function GlobalHeader({
 
         {/* ── RIGHT: Search + Actions + User ────────────────────── */}
         <div className="flex items-center gap-2">
+
+          {/* Market status */}
+          <MarketStatusBadge />
 
           {/* Global search */}
           <div className="hidden sm:block w-52">

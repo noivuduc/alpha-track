@@ -106,8 +106,9 @@ class WorkerSettings:
     ]
 
     cron_jobs = [
-        cron(refresh_prices, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55},
-             unique=True, timeout=300),
+        # Prices: every minute — task self-throttles based on market state
+        # (30s during regular hours, 2min extended, skip when closed)
+        cron(refresh_prices, second={0, 30}, unique=True, timeout=60),
 
         cron(refresh_history, hour={21}, minute={0},
              unique=True, timeout=1800),

@@ -33,12 +33,30 @@ async def seed_ticker(ctx: dict, ticker: str, source: str = "research") -> None:
 
     try:
         async with DataService(cache) as ds:
+            # Phase 1: Free data (yfinance prices, history, news, profile)
             await asyncio.gather(
                 _seed_prices(ds, cache, ticker),
                 _fetch_and_cache_history(cache, ticker, "1y", "1d"),
                 _fetch_and_store_news(cache, ticker),
                 ds.get_company_facts(ticker),
                 ds.get_profile(ticker),
+                return_exceptions=True,
+            )
+
+            # Phase 2: Paid data — fully populate all research datasets
+            # so fetch_research() never needs to call paid APIs
+            await asyncio.gather(
+                ds.get_metrics_snapshot(ticker),
+                ds.get_institutional_ownership(ticker),
+                ds.get_insider_trades(ticker),
+                ds.get_financials_annual(ticker),
+                ds.get_financials_ttm(ticker),
+                ds.get_financials_quarterly(ticker),
+                ds.get_metrics_history_annual(ticker),
+                ds.get_metrics_history_quarterly(ticker),
+                ds.get_analyst_estimates_annual(ticker),
+                ds.get_analyst_estimates_quarterly(ticker),
+                ds.get_segmented_revenues(ticker),
                 return_exceptions=True,
             )
 

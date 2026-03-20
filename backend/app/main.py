@@ -23,7 +23,7 @@ from app.config import get_settings
 from app.cost_tracker import init_request_cost
 from app.database import engine, init_redis, close_redis, Base, get_cache
 from app.rate_limiter import limiter, rate_limit_exceeded_handler
-from app.routers import auth, portfolio, market, admin, research, search
+from app.routers import auth, portfolio, market, admin, research, search, stream
 from app.pipeline.registry import seed_tracked_tickers_from_db
 
 settings = get_settings()
@@ -166,6 +166,7 @@ app.include_router(market.router,    prefix="/api/v1")
 app.include_router(admin.router,     prefix="/api/v1")
 app.include_router(research.router,  prefix="/api/v1")
 app.include_router(search.router,    prefix="/api/v1")
+app.include_router(stream.router,   prefix="/api/v1")
 
 
 @app.get("/health")

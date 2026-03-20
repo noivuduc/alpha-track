@@ -1,6 +1,6 @@
 "use client";
 import { ExternalLink, RefreshCw } from "lucide-react";
-import { ResearchData } from "@/lib/api";
+import { ResearchData, PriceUpdate } from "@/lib/api";
 
 function fmt(n: number | undefined | null, decimals = 2): string {
   if (n == null) return "—";
@@ -15,16 +15,18 @@ function fmtLargeNum(n: number | undefined | null): string {
   return `$${n.toLocaleString()}`;
 }
 
-interface Props { data: ResearchData; onRefresh: () => void; refreshing: boolean; }
+interface Props { data: ResearchData; livePrice?: PriceUpdate | null; onRefresh: () => void; refreshing: boolean; }
 
-export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
+export default function ResearchHeader({ data, livePrice, onRefresh, refreshing }: Props) {
   const snap     = data.overview.snapshot;
   const company  = data.overview.company;
   const profile  = data.overview.profile;
-  const positive = (snap.day_change ?? 0) >= 0;
 
-  const change    = snap.day_change;
-  const changePct = snap.day_change_percent;
+  const isLive    = !!(livePrice && livePrice.price > 0);
+  const price     = isLive ? livePrice.price       : snap.price;
+  const change    = isLive ? livePrice.change       : snap.day_change;
+  const changePct = isLive ? livePrice.change_pct   : snap.day_change_percent;
+  const positive  = (change ?? 0) >= 0;
 
   return (
     <div className="bg-zinc-900 border-b border-zinc-800">
@@ -75,8 +77,16 @@ export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
           <div className="flex flex-wrap gap-6 items-start">
             {/* Price block */}
             <div className="text-right">
-              <div className="text-3xl font-bold font-mono text-zinc-50">
-                ${fmt(snap.price, 2)}
+              <div className="flex items-baseline gap-2 justify-end">
+                <div className="text-3xl font-bold font-mono text-zinc-50">
+                  ${fmt(price, 2)}
+                </div>
+                {isLive && (
+                  <span className="flex items-center gap-1 text-[10px] text-emerald-500 font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_theme(colors.emerald.400)] animate-pulse" />
+                    LIVE
+                  </span>
+                )}
               </div>
               {change != null && (
                 <div className={`text-sm font-mono mt-0.5 ${positive ? "text-emerald-400" : "text-red-400"}`}>
@@ -84,7 +94,9 @@ export default function ResearchHeader({ data, onRefresh, refreshing }: Props) {
                 </div>
               )}
               <div className="text-xs text-zinc-600 mt-1">
-                {snap.time ? new Date(snap.time).toLocaleString() : ""}
+                {isLive
+                  ? `Live · ${new Date(livePrice.fetched_at).toLocaleTimeString()}`
+                  : snap.time ? new Date(snap.time).toLocaleString() : ""}
               </div>
             </div>
 

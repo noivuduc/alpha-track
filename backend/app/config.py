@@ -81,6 +81,22 @@ class Settings(BaseSettings):
     PREFER_FREE_FOR_PRICES: bool = True     # yfinance for prices (free)
     YFINANCE_TIMEOUT:       int = 10
 
+    # ── Market schedule (US exchanges) ──────────────────────────────────
+    MARKET_TIMEZONE:          str = "America/New_York"
+    MARKET_REGULAR_OPEN:      str = "09:30"   # HH:MM local time
+    MARKET_REGULAR_CLOSE:     str = "16:00"
+    MARKET_PREMARKET_OPEN:    str = "04:00"
+    MARKET_AFTERHOURS_CLOSE:  str = "20:00"
+
+    # Pipeline price fetch intervals (seconds) per market state
+    PRICE_INTERVAL_REGULAR:   int = 30
+    PRICE_INTERVAL_EXTENDED:  int = 120
+    PRICE_INTERVAL_CLOSED:    int = 0         # 0 = skip fetching
+
+    # SSE
+    SSE_HEARTBEAT_SECONDS:    int = 15
+    SSE_MAX_CONNECTIONS:      int = 1000
+
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:3000", "http://localhost:3001",
         "http://localhost:3002", "http://localhost:3003",

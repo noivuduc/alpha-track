@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { TrendingUp, TrendingDown, DollarSign, Activity, ExternalLink } from "lucide-react";
 import {
@@ -8,7 +8,7 @@ import {
 } from "recharts";
 import {
   Position, PortfolioAnalytics, ContributionEntry, PositionAnalyticsEntry,
-  PortfolioNewsItem, PortfolioAnalysisResponse,
+  PortfolioNewsItem, PortfolioAnalysisResponse, PriceUpdate,
 } from "@/lib/api";
 import { PortfolioHealthCard, SuggestionCard } from "./AnalysisTab";
 import { fmt, fmtCurrency, fmtLarge, gainClass } from "@/lib/portfolio-math";
@@ -22,6 +22,7 @@ interface Props {
   loading:          boolean;
   period:           string;
   analysis?:        PortfolioAnalysisResponse | null;
+  livePrices?:      Record<string, PriceUpdate>;
   onOpenSimulator?: (ticker: string) => void;
 }
 
@@ -479,11 +480,46 @@ function NewsItem({ item }: { item: PortfolioNewsItem }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-export default function OverviewTab({ analytics: a, positions, loading, analysis, onOpenSimulator }: Props) {
+export default function OverviewTab({ analytics: a, positions, loading, analysis, livePrices, onOpenSimulator }: Props) {
   const [range, setRange] = useState<Range>("1Y");
 
-  const dayPositive  = (a?.day_gain   ?? 0) >= 0;
-  const gainPositive = (a?.total_gain ?? 0) >= 0;
+  // Overlay live prices on analytics summary when available
+  const live = useMemo(() => {
+    if (!a || !livePrices || Object.keys(livePrices).length === 0) return null;
+    let totalValue = 0;
+    let dayChange  = 0;
+    let hasLive    = false;
+
+    for (const pos of positions) {
+      const lp = livePrices[pos.ticker];
+      if (lp && lp.price > 0) {
+        totalValue += lp.price * pos.shares;
+        dayChange  += lp.change * pos.shares;
+        hasLive = true;
+      } else {
+        totalValue += pos.current_value ?? pos.shares * pos.cost_basis;
+      }
+    }
+
+    if (!hasLive) return null;
+
+    const totalCost   = a.total_cost;
+    const totalGain   = totalValue - totalCost;
+    const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
+    const prevValue    = totalValue - dayChange;
+    const dayGainPct   = prevValue > 0 ? (dayChange / prevValue) * 100 : 0;
+
+    return { totalValue, totalGain, totalGainPct, dayGain: dayChange, dayGainPct };
+  }, [a, positions, livePrices]);
+
+  const displayValue    = live?.totalValue    ?? a?.total_value;
+  const displayGain     = live?.totalGain     ?? a?.total_gain;
+  const displayGainPct  = live?.totalGainPct  ?? a?.total_gain_pct;
+  const displayDayGain  = live?.dayGain       ?? a?.day_gain;
+  const displayDayPct   = live?.dayGainPct    ?? a?.day_gain_pct;
+
+  const dayPositive  = (displayDayGain  ?? 0) >= 0;
+  const gainPositive = (displayGain     ?? 0) >= 0;
   const sharpe       = a?.risk_metrics?.sharpe;
   const dm           = a?.derived_metrics;
   const rollingRet   = a?.rolling_returns;
@@ -572,8 +608,8 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
       {/* Row 1 — Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          label="Portfolio Value"
-          value={fmtCurrency(a?.total_value)}
+          label={live ? "Portfolio Value ●" : "Portfolio Value"}
+          value={fmtCurrency(displayValue)}
           sub={ytdPct != null ? `${fmtPctVal(ytdPct)} YTD` : undefined}
           positive={ytdPct != null ? ytdPct >= 0 : undefined}
           large
@@ -581,16 +617,16 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
           tooltip={valueTooltip}
         />
         <StatCard
-          label="Total Gain"
-          value={fmtCurrency(a?.total_gain)}
-          sub={a?.total_gain_pct != null ? fmtPctVal(a.total_gain_pct) : undefined}
+          label={live ? "Total Gain ●" : "Total Gain"}
+          value={fmtCurrency(displayGain)}
+          sub={displayGainPct != null ? fmtPctVal(displayGainPct) : undefined}
           positive={gainPositive}
           icon={gainPositive ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
         />
         <StatCard
-          label="Day Gain"
-          value={fmtCurrency(a?.day_gain)}
-          sub={a?.day_gain_pct != null ? fmtPctVal(a.day_gain_pct) : undefined}
+          label={live ? "Day Gain ●" : "Day Gain"}
+          value={fmtCurrency(displayDayGain)}
+          sub={displayDayPct != null ? fmtPctVal(displayDayPct) : undefined}
           positive={dayPositive}
           icon={dayPositive ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
         />

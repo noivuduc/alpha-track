@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, RefObject } from "react";
-import { ResearchData } from "@/lib/api";
+import { ResearchData, PriceUpdate } from "@/lib/api";
 
 function fmt(n: number | undefined | null, d = 2): string {
   if (n == null) return "—";
@@ -16,10 +16,11 @@ function fmtLarge(n: number | undefined | null): string {
 
 interface Props {
   data: ResearchData;
+  livePrice?: PriceUpdate | null;
   sentinelRef: RefObject<HTMLDivElement | null>;
 }
 
-export default function CompanySummaryBar({ data, sentinelRef }: Props) {
+export default function CompanySummaryBar({ data, livePrice, sentinelRef }: Props) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -36,7 +37,11 @@ export default function CompanySummaryBar({ data, sentinelRef }: Props) {
   if (!visible) return null;
 
   const snap     = data.overview.snapshot;
-  const positive = (snap.day_change ?? 0) >= 0;
+  const isLive   = !!(livePrice && livePrice.price > 0);
+  const price    = isLive ? livePrice.price     : snap.price;
+  const change   = isLive ? livePrice.change    : snap.day_change;
+  const changePct = isLive ? livePrice.change_pct : snap.day_change_percent;
+  const positive = (change ?? 0) >= 0;
   const revenue  = data.financials.income_ttm?.revenue;
 
   return (
@@ -58,12 +63,15 @@ export default function CompanySummaryBar({ data, sentinelRef }: Props) {
         {/* Price */}
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-zinc-100 font-mono font-semibold tabular-nums">
-            ${fmt(snap.price)}
+            ${fmt(price)}
           </span>
-          {snap.day_change != null && (
+          {change != null && (
             <span className={`font-mono tabular-nums ${positive ? "text-emerald-400" : "text-red-400"}`}>
-              {positive ? "+" : ""}{fmt(snap.day_change)} ({positive ? "+" : ""}{fmt(snap.day_change_percent)}%)
+              {positive ? "+" : ""}{fmt(change)} ({positive ? "+" : ""}{fmt(changePct)}%)
             </span>
+          )}
+          {isLive && (
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_4px_theme(colors.emerald.400)] animate-pulse" />
           )}
         </div>
 

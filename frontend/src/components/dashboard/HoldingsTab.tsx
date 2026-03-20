@@ -8,7 +8,7 @@ import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import SectorDonut, { SectorSlice } from "@/components/charts/SectorDonut";
 import {
   Position, Transaction, PortfolioAnalytics, ContributionEntry, HistoryBar,
-  positions as posApi, transactions as txnApi, market,
+  PriceUpdate, positions as posApi, transactions as txnApi, market,
 } from "@/lib/api";
 import { fmt, fmtCurrency, fmtPct, gainClass } from "@/lib/portfolio-math";
 import DatePicker from "@/components/ui/DatePicker";
@@ -40,6 +40,7 @@ interface Props {
   portfolioId: string;
   data:        Position[];
   analytics?:  PortfolioAnalytics | null;
+  livePrices?: Record<string, PriceUpdate>;
   onRefresh:   () => void;
 }
 
@@ -803,7 +804,52 @@ function AddTransactionForm({ form, setForm, adding, error, onSubmit, onCancel }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }: Props) {
+export default function HoldingsTab({ portfolioId, data, analytics, livePrices, onRefresh }: Props) {
+  // ── Overlay live prices ──────────────────────────────────────────────────
+  const liveData = useMemo(() => {
+    if (!livePrices || Object.keys(livePrices).length === 0) return data;
+    return data.map(pos => {
+      const lp = livePrices[pos.ticker];
+      if (!lp || lp.price <= 0) return pos;
+      const currentPrice = lp.price;
+      const currentValue = currentPrice * pos.shares;
+      const costTotal    = pos.cost_basis * pos.shares;
+      const gainLoss     = currentValue - costTotal;
+      const gainLossPct  = costTotal > 0 ? (gainLoss / costTotal) * 100 : 0;
+      return {
+        ...pos,
+        current_price: currentPrice,
+        current_value: currentValue,
+        gain_loss:     gainLoss,
+        gain_loss_pct: gainLossPct,
+        _live:         true,
+        _change:       lp.change,
+        _change_pct:   lp.change_pct,
+      };
+    });
+  }, [data, livePrices]);
+
+  // Track which tickers just got a price flash
+  const [flashTickers, setFlashTickers] = useState<Record<string, "up" | "down">>({});
+  const prevPricesRef = React.useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    if (!livePrices) return;
+    const flashes: Record<string, "up" | "down"> = {};
+    for (const [ticker, lp] of Object.entries(livePrices)) {
+      const prev = prevPricesRef.current[ticker];
+      if (prev != null && lp.price !== prev) {
+        flashes[ticker] = lp.price > prev ? "up" : "down";
+      }
+      prevPricesRef.current[ticker] = lp.price;
+    }
+    if (Object.keys(flashes).length > 0) {
+      setFlashTickers(flashes);
+      const timer = setTimeout(() => setFlashTickers({}), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [livePrices]);
+
   // ── Sort & filter ──────────────────────────────────────────────────────────
   const [sortKey, setSortKey] = useState<SortKey>("current_value");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -876,7 +922,7 @@ export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }:
   };
 
   const displayData = useMemo(() => {
-    let arr = [...data];
+    let arr = [...liveData];
     if (filter === "winners") arr = arr.filter(p => (p.gain_loss ?? 0) >= 0);
     if (filter === "losers")  arr = arr.filter(p => (p.gain_loss ?? 0) <  0);
     return arr.sort((a, b) => {
@@ -885,13 +931,17 @@ export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }:
       if (typeof av === "string") return sortDir * av.localeCompare(bv as string);
       return sortDir * ((av as number) - (bv as number));
     });
-  }, [data, filter, sortKey, sortDir]);
+  }, [liveData, filter, sortKey, sortDir]);
 
   // ── Totals ─────────────────────────────────────────────────────────────────
-  const totalValue  = data.reduce((s, p) => s + (p.current_value ?? 0), 0);
-  const totalGL     = data.reduce((s, p) => s + (p.gain_loss     ?? 0), 0);
-  const totalCost   = data.reduce((s, p) => s + p.shares * p.cost_basis, 0);
+  const totalValue  = liveData.reduce((s, p) => s + (p.current_value ?? 0), 0);
+  const totalGL     = liveData.reduce((s, p) => s + (p.gain_loss     ?? 0), 0);
+  const totalCost   = liveData.reduce((s, p) => s + p.shares * p.cost_basis, 0);
   const totalRetPct = totalCost > 0 ? (totalGL / totalCost) * 100 : null;
+  const totalDayChange = livePrices ? liveData.reduce((s, p) => {
+    const lp = livePrices[p.ticker];
+    return s + (lp ? lp.change * p.shares : 0);
+  }, 0) : 0;
 
   // ── Add transaction handler ────────────────────────────────────────────────
   const handleAddTransaction = async () => {
@@ -1100,8 +1150,18 @@ export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }:
                       <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-400">
                         ${fmt(pos.cost_basis)}
                       </td>
-                      <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-300">
-                        {pos.current_price != null ? `$${fmt(pos.current_price)}` : "—"}
+                      <td className={`px-4 py-3 text-right font-mono tabular-nums rounded-r ${
+                        flashTickers[pos.ticker] === "up"   ? "animate-price-flash-up" :
+                        flashTickers[pos.ticker] === "down" ? "animate-price-flash-down" :
+                        "text-zinc-300"
+                      }`}>
+                        <div>{pos.current_price != null ? `$${fmt(pos.current_price)}` : "—"}</div>
+                        {(pos as any)._live && livePrices?.[pos.ticker] && (
+                          <div className={`text-[10px] leading-tight ${livePrices[pos.ticker].change >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                            {livePrices[pos.ticker].change >= 0 ? "+" : ""}{livePrices[pos.ticker].change.toFixed(2)}
+                            {" "}({livePrices[pos.ticker].change_pct >= 0 ? "+" : ""}{livePrices[pos.ticker].change_pct.toFixed(2)}%)
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-200 font-medium">
                         {fmtK(pos.current_value)}
@@ -1157,7 +1217,15 @@ export default function HoldingsTab({ portfolioId, data, analytics, onRefresh }:
                   <td className="px-4 py-3">
                     <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Portfolio</span>
                   </td>
-                  <td colSpan={3} />
+                  <td />
+                  <td />
+                  <td className="px-4 py-3 text-right">
+                    {totalDayChange !== 0 && (
+                      <div className={`text-[10px] font-mono ${gainClass(totalDayChange)}`}>
+                        Day: {totalDayChange >= 0 ? "+" : ""}{fmtK(totalDayChange)}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <div className="font-mono font-bold text-zinc-100 text-sm">{fmtK(totalValue)}</div>
                     <div className="text-[10px] text-zinc-600">Mkt Value</div>

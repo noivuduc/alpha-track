@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
-import { researchApi, ResearchData } from "@/lib/api";
+import { researchApi, ResearchData, PriceUpdate } from "@/lib/api";
+import { usePriceStream } from "@/hooks/usePriceStream";
 
 import GlobalHeader        from "@/components/GlobalHeader";
 import SectionPanel        from "./SectionPanel";
@@ -70,9 +71,20 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [finPeriod,  setFinPeriod]  = useState<"annual" | "quarterly">("annual");
   const [navOpen,    setNavOpen]    = useState(false);
+  const [livePrice,  setLivePrice]  = useState<PriceUpdate | null>(null);
 
   // Sentinel ref: when the company header scrolls out of view, the summary bar appears
   const headerSentinelRef = useRef<HTMLDivElement>(null);
+
+  const handleLivePrice = useCallback((update: PriceUpdate) => {
+    if (update.ticker === ticker.toUpperCase()) setLivePrice(update);
+  }, [ticker]);
+
+  usePriceStream({
+    tickers: [ticker.toUpperCase()],
+    enabled: !!data,
+    onPrice: handleLivePrice,
+  });
 
   const load = useCallback(async (force = false) => {
     try {
@@ -194,7 +206,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
       <GlobalHeader showBack />
 
       {/* Sticky summary bar (appears when company header scrolls out of view) */}
-      <CompanySummaryBar data={data} sentinelRef={headerSentinelRef} />
+      <CompanySummaryBar data={data} livePrice={livePrice} sentinelRef={headerSentinelRef} />
 
       {/* Mobile nav drawer overlay */}
       {navOpen && (
@@ -217,6 +229,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
         {/* Company info header — scrolls with page; sentinel marks its bottom edge */}
         <ResearchHeader
           data={data}
+          livePrice={livePrice}
           onRefresh={async () => { setRefreshing(true); await load(true); setRefreshing(false); }}
           refreshing={refreshing}
         />

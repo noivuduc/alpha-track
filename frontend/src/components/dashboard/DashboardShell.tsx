@@ -1,11 +1,13 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { LayoutDashboard, BarChart2, ShieldAlert, FlaskConical } from "lucide-react";
 import {
   portfolios as portApi, positions as posApi,
-  Portfolio, Position, PortfolioAnalytics, PortfolioAnalysisResponse,
+  Portfolio, Position, PortfolioAnalytics, PortfolioAnalysisResponse, PriceUpdate,
 } from "@/lib/api";
+import { useMarketStatus } from "@/hooks/useMarketStatus";
+import { usePriceStream } from "@/hooks/usePriceStream";
 import GlobalHeader from "@/components/GlobalHeader";
 import PageHeader   from "@/components/PageHeader";
 
@@ -36,6 +38,24 @@ export default function DashboardShell() {
   const [loadingData,      setLoadingData]      = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analysis,         setAnalysis]         = useState<PortfolioAnalysisResponse | null>(null);
+  const [livePrices,       setLivePrices]       = useState<Record<string, PriceUpdate>>({});
+
+  const mktStatus = useMarketStatus();
+
+  const tickers = useMemo(
+    () => positions.map(p => p.ticker),
+    [positions],
+  );
+
+  const handlePriceUpdate = useCallback((update: PriceUpdate) => {
+    setLivePrices(prev => ({ ...prev, [update.ticker]: update }));
+  }, []);
+
+  usePriceStream({
+    tickers,
+    enabled: tickers.length > 0,
+    onPrice: handlePriceUpdate,
+  });
 
   // ── Load portfolios on mount ─────────────────────────────
   useEffect(() => {
@@ -145,6 +165,7 @@ export default function DashboardShell() {
                 loading={analyticsLoading}
                 period={period}
                 analysis={analysis}
+                livePrices={livePrices}
                 onOpenSimulator={ticker => { setSimPrefill(ticker); setTab("simulator"); }}
               />
             )}
@@ -153,6 +174,7 @@ export default function DashboardShell() {
                 portfolioId={selected.id}
                 data={positions}
                 analytics={analytics}
+                livePrices={livePrices}
                 onRefresh={() => {
                   loadPositions(selected.id);
                   loadAnalytics(selected.id, period, true);

@@ -1,8 +1,8 @@
 """
-Price refresh cron task — bulk-fetches current prices for all tracked tickers.
+Price refresh task — bulk-fetches current prices for all tracked tickers.
 
-Runs every 5 minutes during US market hours (9:30-16:00 ET, weekdays).
-Uses yf.download() for efficient batching.
+Market-aware: skips fetching when market is closed. Publishes updates
+to Redis Pub/Sub channel "prices:live" for real-time SSE streaming.
 """
 from __future__ import annotations
 
@@ -11,13 +11,15 @@ import logging
 from datetime import datetime, timezone
 
 from app.config import get_settings
-from app.database import Cache
+from app.database import Cache, get_redis
 from app.pipeline.registry import get_tickers_needing_price_refresh, mark_price_refreshed
+from app.services.market_calendar import get_market_status, get_price_interval
 
 log      = logging.getLogger(__name__)
 settings = get_settings()
 
-_BATCH_SIZE = 50
+_BATCH_SIZE    = 50
+PUBSUB_CHANNEL = "prices:live"
 
 
 def _price_key(ticker: str) -> str:
@@ -25,18 +27,31 @@ def _price_key(ticker: str) -> str:
 
 
 async def refresh_prices(ctx: dict) -> None:
-    """ARQ cron task: refresh current prices for tracked tickers."""
+    """ARQ task: refresh current prices for tracked tickers."""
     cache: Cache = ctx["cache"]
 
-    tickers = await get_tickers_needing_price_refresh(max_age_seconds=280)
+    status = get_market_status()
+    interval = get_price_interval()
+
+    if interval == 0:
+        log.debug("refresh_prices: market closed, skipping")
+        r = get_redis()
+        await r.publish(PUBSUB_CHANNEL, json.dumps({
+            "type": "market_status", **status,
+        }))
+        return
+
+    tickers = await get_tickers_needing_price_refresh(max_age_seconds=max(interval - 5, 10))
     if not tickers:
         log.debug("refresh_prices: all tickers up-to-date")
         return
 
-    log.info("refresh_prices: %d tickers need price update", len(tickers))
+    log.info("refresh_prices: %d tickers need price update (market=%s)", len(tickers), status["state"])
 
     import asyncio
     loop = asyncio.get_event_loop()
+
+    all_updates: list[dict] = []
 
     for i in range(0, len(tickers), _BATCH_SIZE):
         batch = tickers[i : i + _BATCH_SIZE]
@@ -49,11 +64,20 @@ async def refresh_prices(ctx: dict) -> None:
                         json.dumps(data),
                         settings.CACHE_PRICE_TTL,
                     )
+                    all_updates.append(data)
             await mark_price_refreshed(list(prices.keys()))
             log.info("refresh_prices: batch %d-%d done (%d tickers)",
                      i, i + len(batch), len(prices))
         except Exception as e:
             log.error("refresh_prices: batch %d failed: %s", i, e)
+
+    if all_updates:
+        try:
+            r = get_redis()
+            await r.publish(PUBSUB_CHANNEL, json.dumps(all_updates))
+            log.info("refresh_prices: published %d updates to %s", len(all_updates), PUBSUB_CHANNEL)
+        except Exception as e:
+            log.warning("refresh_prices: publish failed: %s", e)
 
 
 def _bulk_fetch_yfinance(tickers: list[str]) -> dict[str, dict]:

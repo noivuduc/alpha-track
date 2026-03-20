@@ -15,9 +15,28 @@
   }
 }
 
+@keyframes price-flash-up {
+  0%   { background-color: transparent; color: rgb(212 212 216); }
+  15%  { background-color: rgba(16, 185, 129, 0.25); color: rgb(110 231 183); }
+  40%  { background-color: rgba(16, 185, 129, 0.18); color: rgb(110 231 183); }
+  100% { background-color: transparent; color: rgb(212 212 216); }
+}
+@keyframes price-flash-down {
+  0%   { background-color: transparent; color: rgb(212 212 216); }
+  15%  { background-color: rgba(239, 68, 68, 0.25); color: rgb(252 165 165); }
+  40%  { background-color: rgba(239, 68, 68, 0.18); color: rgb(252 165 165); }
+  100% { background-color: transparent; color: rgb(212 212 216); }
+}
+
 @layer utilities {
   .tabular-nums {
     font-variant-numeric: tabular-nums;
+  }
+  .animate-price-flash-up {
+    animation: price-flash-up 1.2s ease-in-out forwards;
+  }
+  .animate-price-flash-down {
+    animation: price-flash-down 1.2s ease-in-out forwards;
   }
   .scrollbar-thin {
     scrollbar-width: thin;
