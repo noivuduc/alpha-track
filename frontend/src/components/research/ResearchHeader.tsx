@@ -1,6 +1,7 @@
 "use client";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { ResearchData, PriceUpdate } from "@/lib/api";
+import TickerLogo from "@/components/ui/TickerLogo";
 
 function fmt(n: number | undefined | null, decimals = 2): string {
   if (n == null) return "—";
@@ -35,9 +36,7 @@ export default function ResearchHeader({ data, livePrice, onRefresh, refreshing 
           {/* Left: company identity */}
           <div>
             <div className="flex items-center gap-3 mb-1">
-              <div className="w-9 h-9 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
-                <span className="text-white text-sm font-bold">{data.ticker[0]}</span>
-              </div>
+              <TickerLogo ticker={data.ticker} size={36} rounded="lg" />
               <div>
                 <div className="flex items-center gap-2">
                   <h1 className="text-xl font-bold text-zinc-50">

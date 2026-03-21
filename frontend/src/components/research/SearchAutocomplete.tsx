@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Search, X } from "lucide-react";
 import { searchApi, SearchResult } from "@/lib/api";
+import TickerLogo from "@/components/ui/TickerLogo";
 
 // Highlight matching text
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -18,15 +19,6 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
-// Color avatar based on ticker first letter
-const AVATAR_COLORS = [
-  "bg-blue-600","bg-violet-600","bg-emerald-600","bg-amber-600","bg-rose-600",
-  "bg-cyan-600","bg-indigo-600","bg-teal-600","bg-orange-600","bg-pink-600",
-];
-function tickerColor(sym: string) {
-  const code = sym.charCodeAt(0) % AVATAR_COLORS.length;
-  return AVATAR_COLORS[code];
-}
 
 export default function SearchAutocomplete({ placeholder = "Search ticker or company…" }: { placeholder?: string }) {
   const router = useRouter();
@@ -130,10 +122,8 @@ export default function SearchAutocomplete({ placeholder = "Search ticker or com
                   i === active ? "bg-zinc-700/70" : "hover:bg-zinc-800"
                 } ${i < results.length - 1 ? "border-b border-zinc-800" : ""}`}
               >
-                {/* Avatar */}
-                <div className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 text-white text-xs font-bold ${tickerColor(r.symbol)}`}>
-                  {r.symbol[0]}
-                </div>
+                {/* Logo */}
+                <TickerLogo ticker={r.symbol} size={32} rounded="md" />
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">

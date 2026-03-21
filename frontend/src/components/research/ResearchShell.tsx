@@ -180,7 +180,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
     gross_margin:     metrics.snapshot?.gross_margin    ?? profile.gross_margins,
     operating_margin: metrics.snapshot?.operating_margin ?? profile.operating_margins,
     net_margin:       metrics.snapshot?.net_margin       ?? profile.profit_margins,
-    roic:             metrics.snapshot?.return_on_invested_capital,
+    roic:             metrics.snapshot?.return_on_invested_capital ?? profile.roe,
     pe:               profile.pe_ratio ?? metrics.snapshot?.price_to_earnings_ratio,
     ev_ebitda:        profile.ev_ebitda ?? metrics.snapshot?.enterprise_value_to_ebitda_ratio,
     ps:               profile.price_to_sales ?? metrics.snapshot?.price_to_sales_ratio,

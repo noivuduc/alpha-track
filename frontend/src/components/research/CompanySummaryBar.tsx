@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, RefObject } from "react";
 import { ResearchData, PriceUpdate } from "@/lib/api";
+import TickerLogo from "@/components/ui/TickerLogo";
 
 function fmt(n: number | undefined | null, d = 2): string {
   if (n == null) return "—";
@@ -49,9 +50,7 @@ export default function CompanySummaryBar({ data, livePrice, sentinelRef }: Prop
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-2 flex items-center gap-4 text-xs overflow-x-auto scrollbar-none">
         {/* Identity */}
         <div className="flex items-center gap-2 shrink-0">
-          <div className="w-6 h-6 bg-blue-600 rounded flex items-center justify-center text-white text-[10px] font-bold shrink-0">
-            {data.ticker[0]}
-          </div>
+          <TickerLogo ticker={data.ticker} size={24} rounded="md" />
           <span className="font-mono font-semibold text-blue-400">{data.ticker}</span>
           <span className="text-zinc-400 hidden sm:block truncate max-w-[180px]">
             {data.overview.company.name}

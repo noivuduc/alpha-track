@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { fmt, fmtCurrency, fmtPct, gainClass } from "@/lib/portfolio-math";
 import DatePicker from "@/components/ui/DatePicker";
+import TickerLogo from "@/components/ui/TickerLogo";
 
 // ── Module-level sector cache (survives re-renders) ────────────────────────────
 const _sectorCache: Record<string, string | null> = {};
@@ -134,41 +135,6 @@ function reconcileFromTxns(txns: Transaction[]): { shares: number; costBasis: nu
   return { shares: totalShares, costBasis: totalCost / totalShares };
 }
 
-// ── Ticker logo ────────────────────────────────────────────────────────────────
-// Tries FMP → Parqet → colored-letter badge
-
-function TickerLogo({ ticker }: { ticker: string }) {
-  const [srcIdx, setSrcIdx] = useState(0);
-
-  const color = useMemo(() => {
-    const hue = ticker.split("").reduce((n, c) => n + c.charCodeAt(0), 0) % 360;
-    return `hsl(${hue},55%,38%)`;
-  }, [ticker]);
-
-  const sources = useMemo(() => [
-    `https://financialmodelingprep.com/image-stock/${ticker}.png`,
-    `https://assets.parqet.com/logos/symbol/${ticker}?format=png`,
-  ], [ticker]);
-
-  if (srcIdx >= sources.length) {
-    return (
-      <div
-        className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0"
-        style={{ backgroundColor: color }}
-      >
-        {ticker.slice(0, 2)}
-      </div>
-    );
-  }
-  return (
-    <img
-      src={sources[srcIdx]}
-      alt={ticker}
-      className="w-6 h-6 rounded-full object-contain bg-zinc-800 shrink-0"
-      onError={() => setSrcIdx(i => i + 1)}
-    />
-  );
-}
 
 // ── Mini price chart ───────────────────────────────────────────────────────────
 

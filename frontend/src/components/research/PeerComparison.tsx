@@ -5,6 +5,7 @@ import {
 } from "recharts";
 import { PeerMetrics } from "@/lib/api";
 import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import TickerLogo from "@/components/ui/TickerLogo";
 
 function fmtLarge(n: number | undefined | null): string {
   if (n == null) return "—";
@@ -180,9 +181,7 @@ export default function PeerComparison({
                   }`}>
                   <td className={`py-2 pr-4 sticky left-0 ${isSelf ? "bg-blue-600/10" : "bg-zinc-900"}`}>
                     <div className="flex items-center gap-2">
-                      <div className={`w-6 h-6 rounded flex items-center justify-center text-white text-[10px] font-bold shrink-0 ${isSelf ? "bg-blue-600" : "bg-zinc-700"}`}>
-                        {row.symbol[0]}
-                      </div>
+                      <TickerLogo ticker={row.symbol} size={24} rounded="md" />
                       <div>
                         <div className={`font-mono font-semibold ${isSelf ? "text-blue-400" : "text-zinc-200"}`}>
                           {row.symbol} {isSelf && <span className="text-[10px] text-blue-500 ml-1">YOU</span>}
