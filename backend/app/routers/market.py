@@ -106,14 +106,40 @@ async def get_history(
     )
 
 
+@router.get("/profiles")
+async def get_profiles_bulk(
+    tickers: str = Query(..., description="Comma-separated tickers e.g. AAPL,MSFT,TSLA"),
+    user: User = Depends(check_rate_limit),
+    reader: DataReader = Depends(_get_reader),
+):
+    """
+    Batch profile fetch. Returns all cached profiles in one request.
+
+    Response: {"data": {"AAPL": {...}, "MSFT": {...}}, "missing": ["TSLA"]}
+    Missing tickers are enqueued for seeding and absent from `data`.
+    """
+    ticker_list = list({t.strip().upper() for t in tickers.split(",") if t.strip()})
+    if len(ticker_list) > 50:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Max 50 tickers per request")
+
+    data    = await reader.get_profiles_bulk(ticker_list)
+    missing = [t for t in ticker_list if t not in data]
+
+    for t in missing:
+        await enqueue_seed_ticker(t)
+
+    return {"data": data, "missing": missing}
+
+
 @router.get("/profile/{ticker}")
 async def get_profile(
     ticker: str,
     user: User = Depends(check_rate_limit),
     reader: DataReader = Depends(_get_reader),
 ):
-    sym  = ticker.upper()
-    data = await reader.get_profile(sym)
+    sym    = ticker.upper()
+    result = await reader.get_profiles_bulk([sym])
+    data   = result.get(sym)
     if data:
         return data
 

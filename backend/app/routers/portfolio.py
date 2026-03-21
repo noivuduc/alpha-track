@@ -198,6 +198,8 @@ async def get_analytics(
     if missing_positions:
         for t in missing_history:
             await enqueue_seed_history(t)
+        for t in missing_positions:
+            await enqueue_seed_ticker(t)   # also seed price snapshots
         return JSONResponse(
             status_code=202,
             content={
@@ -210,6 +212,15 @@ async def get_analytics(
     if not any(t in histories for t in tickers):
         raise HTTPException(status.HTTP_502_BAD_GATEWAY,
                             "Could not fetch price history for any position")
+
+    # Enqueue a background refresh for any tickers whose price came from PG
+    # (stale) so Redis gets warmed up for the next request.
+    stale_price_tickers = [
+        t for t in tickers
+        if prices.get(t, {}).get("_source") == "cache_pg_stale"
+    ]
+    for t in stale_price_tickers:
+        await enqueue_seed_ticker(t)
 
     total_value = sum(
         float(pos.shares) * prices.get(pos.ticker, {}).get("price", float(pos.cost_basis))
@@ -309,6 +320,24 @@ async def get_portfolio_analysis(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Portfolio has no open positions",
+        )
+
+    # Ensure SPY + all position tickers have history seeded.
+    # If any are missing, enqueue seeding and return 202 so the
+    # frontend polls until data is ready.
+    tickers_needed = list({pos.ticker for pos in positions} | {"SPY"})
+    missing = []
+    for t in tickers_needed:
+        hist = await reader.get_price_history(t, "1y", "1d")
+        if not hist:
+            missing.append(t)
+    if missing:
+        for t in missing:
+            await enqueue_seed_history(t)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"status": "preparing", "detail": f"Loading price history for {len(missing)} ticker(s)"},
         )
 
     return await run_portfolio_analysis(

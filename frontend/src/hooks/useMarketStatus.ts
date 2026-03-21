@@ -1,37 +1,39 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
-import { marketStatus, MarketStatus } from "@/lib/api";
+import { useState, useEffect, useRef } from "react";
+import { computeMarketStatus, MarketStatus } from "@/lib/marketCalendar";
 
-const POLL_INTERVAL_TRADING = 30_000;
-const POLL_INTERVAL_CLOSED  = 60_000;
+export type { MarketStatus };
 
-export function useMarketStatus() {
+/**
+ * Returns current market status, recomputed locally at every state transition.
+ *
+ * No API calls. A single setTimeout fires exactly when the market state
+ * changes (e.g. open → after_hours), then reschedules for the next one.
+ *
+ * State transitions (ET):
+ *   04:00 closed → pre_market
+ *   09:30 pre_market → open
+ *   16:00 open → after_hours
+ *   20:00 after_hours → closed
+ */
+export function useMarketStatus(): MarketStatus | null {
   const [status, setStatus] = useState<MarketStatus | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const refresh = useCallback(async () => {
-    try {
-      const s = await marketStatus.get();
-      setStatus(s);
-    } catch {
-      /* network error — keep last known status */
-    }
-  }, []);
-
   useEffect(() => {
-    refresh();
+    function tick() {
+      const result = computeMarketStatus();
+      setStatus(result);
 
-    const tick = () => {
-      const interval = status?.is_trading ? POLL_INTERVAL_TRADING : POLL_INTERVAL_CLOSED;
-      timerRef.current = setTimeout(async () => {
-        await refresh();
-        tick();
-      }, interval);
-    };
+      // Fire again exactly when the next state transition happens.
+      // Add 1s buffer so the clock reads past the boundary cleanly.
+      const delay = result.msUntilNextChange + 1_000;
+      timerRef.current = setTimeout(tick, delay);
+    }
+
     tick();
-
     return () => clearTimeout(timerRef.current);
-  }, [refresh, status?.is_trading]);
+  }, []);
 
   return status;
 }

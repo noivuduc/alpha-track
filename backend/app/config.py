@@ -1,5 +1,6 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from functools import lru_cache
 from typing import Literal
 
@@ -20,8 +21,23 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk"
     REDIS_URL:    str = "redis://:changeme@localhost:6379/0"
 
+    # ── Market data providers ─────────────────────────────────────────────
+    # Free provider (default: yfinance)
+    # Set FREE_PROVIDER_MAX_CONCURRENT in .env to override.
+    FREE_PROVIDER_MAX_CONCURRENT: int = 8
+
+    # Paid provider (default: financialdatasets.ai)
+    # Set PAID_PROVIDER_API_KEY and PAID_PROVIDER_BASE_URL in .env.
+    # Old env var names (FINANCIALDATASETS_API_KEY / FINANCIALDATASETS_BASE_URL)
+    # are still read as fallbacks via the validation block at the end of this class.
+    PAID_PROVIDER_API_KEY:  str = ""
+    PAID_PROVIDER_BASE_URL: str = "https://api.financialdatasets.ai"
+
+    # Backward-compat: read old env var names so existing .env files keep working.
+    # These are read by the model_validator below and copied into the new fields.
     FINANCIALDATASETS_API_KEY:  str = ""
     FINANCIALDATASETS_BASE_URL: str = "https://api.financialdatasets.ai"
+    YFINANCE_MAX_CONCURRENT:    int = 0   # 0 = use FREE_PROVIDER_MAX_CONCURRENT
 
     OPENAI_API_KEY:    str = ""
     ANTHROPIC_API_KEY: str = ""
@@ -75,12 +91,6 @@ class Settings(BaseSettings):
     # ── Cost guard ────────────────────────────────────────────────────────
     FD_MAX_CALLS_PER_REQUEST: int = 10     # max paid API calls per request before fallback
 
-    # ── yfinance concurrency ──────────────────────────────────────────────
-    YFINANCE_MAX_CONCURRENT: int = 8       # semaphore: max parallel yfinance fetches
-
-    PREFER_FREE_FOR_PRICES: bool = True     # yfinance for prices (free)
-    YFINANCE_TIMEOUT:       int = 10
-
     # ── Market schedule (US exchanges) ──────────────────────────────────
     MARKET_TIMEZONE:          str = "America/New_York"
     MARKET_REGULAR_OPEN:      str = "09:30"   # HH:MM local time
@@ -102,6 +112,22 @@ class Settings(BaseSettings):
         "http://localhost:3002", "http://localhost:3003",
         "http://localhost:3004", "https://alphadesk.app",
     ]
+
+    @model_validator(mode="after")
+    def _apply_legacy_env_vars(self) -> "Settings":
+        """
+        Copy old env var names → new canonical names when new names are unset.
+        Allows existing .env files with FINANCIALDATASETS_* / YFINANCE_* to
+        keep working without any changes until they are updated.
+        """
+        if not self.PAID_PROVIDER_API_KEY and self.FINANCIALDATASETS_API_KEY:
+            self.PAID_PROVIDER_API_KEY = self.FINANCIALDATASETS_API_KEY
+        if self.PAID_PROVIDER_BASE_URL == "https://api.financialdatasets.ai" \
+                and self.FINANCIALDATASETS_BASE_URL != "https://api.financialdatasets.ai":
+            self.PAID_PROVIDER_BASE_URL = self.FINANCIALDATASETS_BASE_URL
+        if self.YFINANCE_MAX_CONCURRENT > 0 and self.FREE_PROVIDER_MAX_CONCURRENT == 8:
+            self.FREE_PROVIDER_MAX_CONCURRENT = self.YFINANCE_MAX_CONCURRENT
+        return self
 
     class Config:
         env_file = (

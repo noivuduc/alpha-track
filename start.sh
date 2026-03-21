@@ -57,7 +57,8 @@ info "Migrations applied ✓"
 info "Starting FastAPI backend on http://localhost:8000 ..."
 DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
 REDIS_URL="redis://:changeme@localhost:6379/0" \
-  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload &
+  # Limit --reload to app/ only (avoids watching .venv, __pycache__, etc. → fewer FDs / watches)
+  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app &
 BACKEND_PID=$!
 
 cd "$SCRIPT_DIR"

@@ -10,6 +10,7 @@ a pipeline task.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -96,33 +97,187 @@ class DataReader:
             data = json.loads(cached)
             if data.get("price", 0) > 0:
                 data["_source"] = "cache_redis"
-                return data
+                return await self._enrich_zero_change_from_history(ticker, data)
+
+        # L2 fallback: last known price from Postgres (stale but non-zero)
+        pg = await self._read_pg_price(ticker)
+        if pg:
+            return await self._enrich_zero_change_from_history(ticker, pg)
+
+        # L3: last daily close from cached history (pipeline cron / seed_history).
+        # Avoids first-load analytics where spot `price:*` is empty but `history:…:1y:1d`
+        # exists — without this, every position falls back to cost_basis ⇒ $0 gain / day.
+        return await self._price_from_daily_history(ticker)
+
+    def _day_change_from_daily_hist(self, hist: list[dict]) -> tuple[float, float, float] | None:
+        """
+        Return (last_close, change_dollars, change_pct) from 1d bars.
+        Prefers close-to-previous-close; if ~0, uses last bar open→close (session move).
+        """
+        if not hist:
+            return None
+        last = hist[-1]
+        close_raw = last.get("close")
+        if close_raw is None or float(close_raw) <= 0:
+            return None
+        close_f = float(close_raw)
+        prev_f = close_f
+        if len(hist) >= 2:
+            prev_f = float(hist[-2].get("close") or close_f)
+        chg = close_f - prev_f
+        base = prev_f if prev_f > 0 else close_f
+        # Last session: open → close when overnight change is flat (common with rounded data)
+        if abs(chg) < 1e-8 and base > 0:
+            o = last.get("open")
+            if o is not None:
+                open_f = float(o)
+                if open_f > 0 and abs(open_f - close_f) > 1e-8:
+                    chg = close_f - open_f
+                    base = open_f
+        chg_pct = (chg / base * 100.0) if base else 0.0
+        return close_f, chg, chg_pct
+
+    async def _price_from_daily_history(self, ticker: str) -> dict | None:
+        """Synthetic spot from last 1y/1d bars in Redis (tries 5d if 1y missing)."""
+        for period in ("1y", "5d", "1mo"):
+            hist = await self.get_price_history(ticker, period, "1d")
+            if not hist:
+                continue
+            row = self._day_change_from_daily_hist(hist)
+            if not row:
+                continue
+            close_f, chg, chg_pct = row
+            last = hist[-1]
+            return {
+                "ticker":     ticker.upper(),
+                "price":      close_f,
+                "change":     chg,
+                "change_pct": chg_pct,
+                "fetched_at": str(last.get("ts") or ""),
+                "_source":    "history_daily_last",
+            }
+        return None
+
+    async def _enrich_zero_change_from_history(self, ticker: str, data: dict) -> dict:
+        """
+        Stale PG rows and some yfinance spot rows have price but change=0.
+        Portfolio day P&L uses per-share change — fill from daily history when missing.
+        """
+        try:
+            ch = float(data.get("change") or 0.0)
+        except (TypeError, ValueError):
+            ch = 0.0
+        if abs(ch) > 1e-9:
+            return data
+        h = await self._price_from_daily_history(ticker)
+        if not h:
+            return data
+        out = {**data}
+        out["change"] = float(h["change"])
+        out["change_pct"] = float(h["change_pct"])
+        return out
+
+    async def _read_pg_price(self, ticker: str) -> dict | None:
+        try:
+            async with AsyncSessionLocal() as db:
+                row = await db.get(CachePrice, ticker.upper())
+                if row and float(row.price) > 0:
+                    return {
+                        "ticker":     row.ticker,
+                        "price":      float(row.price),
+                        "change":     0.0,                          # stale — no intraday change
+                        "change_pct": float(row.change_pct or 0),
+                        "volume":     row.volume,
+                        "fetched_at": row.fetched_at.isoformat(),
+                        "_source":    "cache_pg_stale",
+                    }
+        except Exception as e:
+            log.warning("PG price read error for %s: %s", ticker, e)
         return None
 
     async def get_prices_bulk(self, tickers: list[str]) -> dict[str, dict]:
-        results: dict[str, dict] = {}
-        for t in tickers:
-            data = await self.get_price(t)
-            if data:
-                results[t] = data
-        return results
+        sem = asyncio.Semaphore(10)
+
+        async def _fetch(t: str) -> tuple[str, dict | None]:
+            async with sem:
+                return t, await self.get_price(t)
+
+        pairs = await asyncio.gather(*[_fetch(t) for t in tickers])
+        return {t: d for t, d in pairs if d is not None}
 
     # ── Price History ────────────────────────────────────────────────────
 
+    # How many calendar days to look back per period string.
+    _PERIOD_DAYS: dict[str, int] = {
+        "1d": 1, "5d": 5, "1mo": 31, "3mo": 92, "6mo": 183,
+        "ytd": 366, "1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "max": 99999,
+    }
+
     async def get_price_history(self, ticker: str, period: str = "1y", interval: str = "1d") -> list[dict] | None:
+        # L1: exact cache key
         key    = _history_key(ticker, period, interval)
         cached = await self.cache.get(key)
         if cached:
             return json.loads(cached)
+
+        # L2: pipeline only caches 1y/1d — slice from that when a shorter
+        # period is requested and the interval is daily (1d).
+        # This avoids permanent 202 loops for period=3mo, 6mo, etc.
+        if interval == "1d" and period != "1y":
+            base = await self.cache.get(_history_key(ticker, "1y", "1d"))
+            if base:
+                bars = json.loads(base)
+                days = self._PERIOD_DAYS.get(period)
+                if not days:
+                    return bars  # unknown period — return everything we have
+                if days >= 365:
+                    return bars  # 1y or longer — full set is fine
+                # Slice by comparing date portion of ISO timestamp (YYYY-MM-DD)
+                # robust against timezone offset differences in the full timestamp
+                from datetime import date, timedelta
+                cutoff_date = (date.today() - timedelta(days=days)).isoformat()
+                sliced = [b for b in bars if b.get("ts", "")[:10] >= cutoff_date]
+                return sliced if sliced else bars  # fall back to full data if slice is empty
+
         return None
 
     # ── Company Profile ──────────────────────────────────────────────────
 
     async def get_profile(self, ticker: str) -> dict | None:
-        cached = await self.cache.get(_profile_key(ticker))
-        if cached:
-            return {**json.loads(cached), "_source": "cache_redis"}
-        return None
+        """Single-ticker profile. Internally uses the batch path."""
+        result = await self.get_profiles_bulk([ticker])
+        return result.get(ticker)
+
+    async def get_profiles_bulk(self, tickers: list[str]) -> dict[str, dict]:
+        """
+        Fetch company profiles for multiple tickers efficiently.
+
+        Strategy:
+          1. Single Redis MGET round-trip for all requested keys.
+          2. Cache hits are returned immediately.
+          3. Misses return no entry (caller should enqueue seed task).
+
+        Returns {TICKER: profile_dict} for every ticker that had cached data.
+        """
+        if not tickers:
+            return {}
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique = [t for t in tickers if not (t in seen or seen.add(t))]  # type: ignore[func-returns-value]
+
+        keys   = [_profile_key(t) for t in unique]
+        values = await self.cache.mget(keys)
+
+        result: dict[str, dict] = {}
+        for ticker, raw in zip(unique, values):
+            if raw is not None:
+                try:
+                    result[ticker] = {**json.loads(raw), "_source": "cache_redis"}
+                except json.JSONDecodeError:
+                    log.warning("Profile cache corrupt for %s — skipping", ticker)
+
+        return result
 
     # ── News ─────────────────────────────────────────────────────────────
 

@@ -8,6 +8,7 @@ import {
 } from "@/lib/api";
 import { useMarketStatus } from "@/hooks/useMarketStatus";
 import { usePriceStream } from "@/hooks/usePriceStream";
+import { usePricePoll } from "@/hooks/usePricePoll";
 import GlobalHeader from "@/components/GlobalHeader";
 import PageHeader   from "@/components/PageHeader";
 
@@ -47,15 +48,35 @@ export default function DashboardShell() {
     [positions],
   );
 
+  // Wait until market status is known before enabling either stream.
+  // Without this, mktStatus null→value flip toggles `enabled` on mount,
+  // causing an immediate abort+reconnect race that surfaces as an SSE error.
+  const mktKnown  = mktStatus !== null;
+  const isTrading = mktStatus?.is_trading === true;
+
+  // Market open → real-time SSE stream
   const handlePriceUpdate = useCallback((update: PriceUpdate) => {
     setLivePrices(prev => ({ ...prev, [update.ticker]: update }));
   }, []);
 
   usePriceStream({
     tickers,
-    enabled: tickers.length > 0,
+    enabled: tickers.length > 0 && mktKnown && isTrading,
     onPrice: handlePriceUpdate,
   });
+
+  // Market closed → single fetch + poll every 5 min, with countdown
+  const { prices: polledPrices, nextRefreshIn, lastFetchedAt } = usePricePoll({
+    tickers,
+    enabled: tickers.length > 0 && mktKnown && !isTrading,
+  });
+
+  // Merge polled prices into livePrices when market is closed
+  useEffect(() => {
+    if (!isTrading && Object.keys(polledPrices).length > 0) {
+      setLivePrices(polledPrices);
+    }
+  }, [isTrading, polledPrices]);
 
   // ── Load portfolios on mount ─────────────────────────────
   useEffect(() => {
@@ -140,6 +161,7 @@ export default function DashboardShell() {
         refreshing={loadingData || analyticsLoading}
         onAddPosition={() => setTab("holdings")}
         onSimulatorOpen={() => { setSimPrefill(undefined); setTab("simulator"); }}
+        marketStatus={mktStatus}
       />
 
       {/* ── Page-level tab bar (sticky below GlobalHeader) ───── */}
@@ -166,6 +188,9 @@ export default function DashboardShell() {
                 period={period}
                 analysis={analysis}
                 livePrices={livePrices}
+                isStreaming={isTrading}
+                nextRefreshIn={isTrading ? null : nextRefreshIn}
+                lastFetchedAt={isTrading ? null : lastFetchedAt}
                 onOpenSimulator={ticker => { setSimPrefill(ticker); setTab("simulator"); }}
               />
             )}

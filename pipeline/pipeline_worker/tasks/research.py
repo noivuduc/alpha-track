@@ -10,8 +10,9 @@ import logging
 from datetime import datetime, timezone
 
 from app.database import Cache
+from app.providers import YahooFinanceProvider
 from app.services.data_service import DataService
-from app.services.peer_service import get_peer_symbols, yf_peer_metrics_sync
+from app.services.peer_service import get_peer_symbols
 from app.services.trend_service import build_trends
 from app.services.anomaly_service import detect_anomalies
 from app.services.insights import compute_insights
@@ -21,6 +22,9 @@ log = logging.getLogger(__name__)
 
 _RESEARCH_CACHE_TTL = 21600   # 6 hours — individual datasets have their own cron refresh
 _ERROR_TTL          = 30
+
+# Module-level provider (stateless, reusable across task invocations)
+_yf = YahooFinanceProvider()
 
 
 def _research_cache_key(ticker: str) -> str:
@@ -95,19 +99,12 @@ async def fetch_research(ctx: dict, ticker: str) -> None:
                 ds.get_segmented_revenues(ticker),
             )
 
-            loop = asyncio.get_event_loop()
-            yf_results = await asyncio.gather(
-                loop.run_in_executor(None, _yf_profile_sync, ticker),
-                loop.run_in_executor(
-                    None, _yf_extended_sync, ticker,
-                    (fin_ann_r.get("financials") or {}).get("income_statements", []),
-                ),
-                *[loop.run_in_executor(None, yf_peer_metrics_sync, ps) for ps in peer_syms],
+            annual_income = (fin_ann_r.get("financials") or {}).get("income_statements", [])
+            profile, yf_ext, peers = await asyncio.gather(
+                _yf.get_profile_extended(ticker),
+                _yf.get_extended_data(ticker, annual_income),
+                _yf.get_peer_metrics(peer_syms),
             )
-
-        profile          = yf_results[0]
-        yf_ext           = yf_results[1]
-        peers: list[dict] = list(yf_results[2:])
 
         response = _assemble_response(
             ticker, facts_r, snapshot_r, metrics_r,
@@ -209,11 +206,3 @@ def _assemble_response(
     return response
 
 
-def _yf_profile_sync(sym: str) -> dict:
-    from app.services.financial_data_service import yf_profile_sync
-    return yf_profile_sync(sym)
-
-
-def _yf_extended_sync(sym: str, annual_income: list) -> dict:
-    from app.services.financial_data_service import yf_extended_sync
-    return yf_extended_sync(sym, annual_income)

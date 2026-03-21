@@ -4,8 +4,12 @@ Smart Data Service — single gateway to all external data.
 Fetch strategy (cheapest → most expensive):
   1. Redis L1 cache     → sub-ms, free, volatile
   2. Postgres L2 cache  → ~2ms,   free, survives Redis restarts
-  3. yfinance           → ~200ms, free, rate-limited
-  4. financialdatasets  → ~300ms, PAID — minimised via long TTLs + worker refresh
+  3. Free provider      → ~200ms, free, rate-limited   (default: yfinance)
+  4. Paid provider      → ~300ms, PAID — minimised via long TTLs + worker refresh
+
+All vendor-specific imports and field-name mappings live in
+app/providers/yahoo_finance.py and app/providers/financial_datasets.py.
+DataService never imports yfinance or httpx directly.
 
 L2 coverage
 -----------
@@ -48,8 +52,6 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import httpx
-import yfinance as yf
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +59,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import AsyncSessionLocal, Cache
 from app.models import CacheDataset, CacheFundamentals, CachePrice
+from app.providers import (
+    FinancialDatasetsProvider,
+    MarketDataProvider,
+    YahooFinanceProvider,
+)
 
 log      = logging.getLogger(__name__)
 settings = get_settings()
@@ -102,40 +109,46 @@ class DataService:
     """
     Single gateway to all external data.
     Routers and services NEVER call yfinance or financialdatasets directly.
+
+    Provider injection
+    ------------------
+    free_provider : MarketDataProvider
+        Used for prices, history, profiles, news (no per-call cost).
+        Defaults to YahooFinanceProvider.
+
+    paid_provider : MarketDataProvider
+        Used for fundamentals, ownership, insider trades, etc.
+        Defaults to FinancialDatasetsProvider.
+
+    To swap a provider, pass a different implementation at construction time:
+        svc = DataService(cache, free_provider=MyAlternativeProvider())
     """
 
-    def __init__(self, cache: Cache, db: AsyncSession | None = None):
+    def __init__(
+        self,
+        cache: Cache,
+        db: AsyncSession | None = None,
+        *,
+        free_provider: MarketDataProvider | None = None,
+        paid_provider: MarketDataProvider | None = None,
+    ):
         self.cache = cache
-        self.db    = db          # kept for API compatibility; not used for PG writes
-        self._fd_client = httpx.AsyncClient(
-            base_url=settings.FINANCIALDATASETS_BASE_URL,
-            headers={"X-API-KEY": settings.FINANCIALDATASETS_API_KEY},
-            timeout=15.0,
-            follow_redirects=True,
+        self.db    = db          # kept for API compatibility; not used internally
+
+        self._free = free_provider or YahooFinanceProvider(
+            max_concurrent=settings.FREE_PROVIDER_MAX_CONCURRENT,
+        )
+        self._paid = paid_provider or FinancialDatasetsProvider(
+            api_key  = settings.PAID_PROVIDER_API_KEY,
+            base_url = settings.PAID_PROVIDER_BASE_URL,
         )
 
     async def aclose(self):
-        await self._fd_client.aclose()
+        if hasattr(self._paid, "aclose"):
+            await self._paid.aclose()
 
     async def __aenter__(self): return self
     async def __aexit__(self, *_): await self.aclose()
-
-    # ── FD HTTP helper ────────────────────────────────────────────────────────
-    async def _fd(self, path: str, params: dict) -> dict:
-        """Safe FD GET — never raises, returns {} on error, logs latency."""
-        t0 = time.perf_counter()
-        try:
-            r  = await self._fd_client.get(path, params=params)
-            ms = int((time.perf_counter() - t0) * 1000)
-            if r.status_code == 200:
-                log.debug("FD %s %s → 200 (%dms)", path, params, ms)
-                return r.json()
-            log.warning("FD %s %s → HTTP %s (%dms): %s",
-                        path, params, r.status_code, ms, r.text[:120])
-            return {}
-        except Exception as e:
-            log.error("FD fetch error %s %s: %s", path, params, e)
-            return {}
 
     # ════════════════════════════════════════════════════════════════════
     # GENERIC L2 HELPERS  (each uses its own isolated session)
@@ -168,6 +181,7 @@ class DataService:
         ticker:       str,
         data:         dict,
         pg_ttl:       int,
+        source:       str | None = None,
     ) -> None:
         """
         Atomic upsert to Postgres L2 cache using INSERT … ON CONFLICT DO UPDATE.
@@ -181,7 +195,7 @@ class DataService:
                 .values(
                     key=key, dataset_type=dataset_type,
                     ticker=ticker.upper(), data=data,
-                    source="financialdatasets",
+                    source=source or "unknown",
                     fetched_at=now, expires_at=expires,
                 )
                 .on_conflict_do_update(
@@ -205,6 +219,7 @@ class DataService:
         pg_ttl:       int,
         force:        bool,
         fetch_fn:     Callable[[], Awaitable[dict]],
+        source:       str | None = None,
     ) -> dict:
         """
         Generic L1 → L2 → API fetch with full logging.
@@ -238,11 +253,11 @@ class DataService:
         raw = await fetch_fn()
         if raw:
             await self.cache.set(key, json.dumps(raw), redis_ttl)
-            await self._upsert_pg_dataset(key, dataset_type, sym, raw, pg_ttl)
+            await self._upsert_pg_dataset(key, dataset_type, sym, raw, pg_ttl, source)
         return raw
 
     # ════════════════════════════════════════════════════════════════════
-    # PRICES  (yfinance free, Redis 15 min — no PG)
+    # PRICES  (free provider, Redis 15 min — no PG)
     # ════════════════════════════════════════════════════════════════════
     async def get_price(self, ticker: str) -> dict[str, Any]:
         key = _price_key(ticker)
@@ -254,8 +269,8 @@ class DataService:
                 return data
             await self.cache.delete(key)
 
-        data = await self._fetch_price_yfinance(ticker)
-        data["_source"] = "yfinance"
+        data = dict(await self._free.get_price(ticker))
+        data["_source"] = self._free.name
         if data.get("price", 0) > 0:
             await self.cache.set(key, json.dumps(data), settings.CACHE_PRICE_TTL)
         return data
@@ -273,55 +288,19 @@ class DataService:
             missing.append(t)
 
         if missing:
-            for ticker, data in (await self._fetch_prices_bulk_yfinance(missing)).items():
-                data["_source"] = "yfinance"
-                results[ticker] = data
-                if data.get("price", 0) > 0:
-                    await self.cache.set(_price_key(ticker), json.dumps(data), settings.CACHE_PRICE_TTL)
+            bulk = await self._free.get_prices_bulk(missing)
+            for ticker, data in bulk.items():
+                d = dict(data)
+                d["_source"] = self._free.name
+                results[ticker] = d
+                if d.get("price", 0) > 0:
+                    await self.cache.set(
+                        _price_key(ticker), json.dumps(d), settings.CACHE_PRICE_TTL,
+                    )
         return results
 
-    async def _fetch_price_yfinance(self, ticker: str) -> dict:
-        loop = asyncio.get_event_loop()
-        def _sync():
-            info = yf.Ticker(ticker).fast_info
-            return {
-                "ticker":     ticker.upper(),
-                "price":      float(info.last_price or 0),
-                "change":     float(info.last_price - info.previous_close) if info.previous_close else 0,
-                "change_pct": float((info.last_price - info.previous_close) / info.previous_close * 100) if info.previous_close else 0,
-                "volume":     int(info.three_month_average_volume or 0),
-                "market_cap": float(info.market_cap or 0),
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            }
-        return await loop.run_in_executor(None, _sync)
-
-    async def _fetch_prices_bulk_yfinance(self, tickers: list[str]) -> dict[str, dict]:
-        loop = asyncio.get_event_loop()
-        def _sync():
-            import pandas as pd
-            data = yf.download(" ".join(tickers), period="2d", auto_adjust=True, progress=False)
-            now  = datetime.now(timezone.utc).isoformat()
-            out: dict = {}
-            for t in tickers:
-                try:
-                    col    = ("Close", t) if isinstance(data.columns, pd.MultiIndex) else "Close"
-                    prices = data[col].dropna()
-                    if len(prices) >= 2:
-                        curr, prev = float(prices.iloc[-1]), float(prices.iloc[-2])
-                        out[t] = {"ticker": t, "price": curr,
-                                  "change": curr - prev,
-                                  "change_pct": (curr - prev) / prev * 100,
-                                  "fetched_at": now}
-                    else:
-                        out[t] = {"ticker": t, "price": 0, "change": 0, "change_pct": 0, "fetched_at": now}
-                except Exception as e:
-                    log.warning("yfinance bulk price error %s: %s", t, e)
-                    out[t] = {"ticker": t, "price": 0, "error": str(e), "fetched_at": now}
-            return out
-        return await loop.run_in_executor(None, _sync)
-
     # ════════════════════════════════════════════════════════════════════
-    # PRICE HISTORY  (yfinance free, Redis 1 hr — no PG)
+    # PRICE HISTORY  (free provider, Redis 1 hr — no PG)
     # ════════════════════════════════════════════════════════════════════
     async def get_price_history(self, ticker: str, period: str = "1y", interval: str = "1d") -> list[dict]:
         key    = _history_key(ticker, period, interval)
@@ -329,24 +308,13 @@ class DataService:
         if cached:
             return json.loads(cached)
 
-        loop = asyncio.get_event_loop()
-        def _sync():
-            hist = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
-            return [{"ts": ts.isoformat(),
-                     "open":   round(float(r["Open"]),  4),
-                     "high":   round(float(r["High"]),  4),
-                     "low":    round(float(r["Low"]),   4),
-                     "close":  round(float(r["Close"]), 4),
-                     "volume": int(r["Volume"])}
-                    for ts, r in hist.iterrows()]
-
-        records = await loop.run_in_executor(None, _sync)
+        records = [dict(bar) for bar in await self._free.get_price_history(ticker, period, interval)]
         ttl = 900 if interval in ("1m", "5m", "15m", "1h") else settings.CACHE_HISTORY_TTL
         await self.cache.set(key, json.dumps(records), ttl)
         return records
 
     # ════════════════════════════════════════════════════════════════════
-    # COMPANY PROFILE  (yfinance free, Redis 7 days — no PG)
+    # COMPANY PROFILE  (free provider, Redis 7 days — no PG)
     # ════════════════════════════════════════════════════════════════════
     async def get_profile(self, ticker: str) -> dict:
         key    = _profile_key(ticker)
@@ -354,29 +322,15 @@ class DataService:
         if cached:
             return {**json.loads(cached), "_source": "cache_redis"}
 
-        data = await self._fetch_profile_yfinance(ticker)
+        data = dict(await self._free.get_profile(ticker))
+        # Back-compat: callers may read "52w_high" / "52w_low" keys
+        data["52w_high"] = data.pop("high_52w", None)
+        data["52w_low"]  = data.pop("low_52w", None)
         await self.cache.set(key, json.dumps(data), settings.CACHE_PROFILE_TTL)
-        return {**data, "_source": "yfinance"}
-
-    async def _fetch_profile_yfinance(self, ticker: str) -> dict:
-        loop = asyncio.get_event_loop()
-        def _sync():
-            i = yf.Ticker(ticker).info
-            return {
-                "ticker": ticker.upper(), "name": i.get("longName", ""),
-                "sector": i.get("sector", ""), "industry": i.get("industry", ""),
-                "description": i.get("longBusinessSummary", ""),
-                "website": i.get("website", ""), "employees": i.get("fullTimeEmployees"),
-                "country": i.get("country", ""), "pe_ratio": i.get("trailingPE"),
-                "fwd_pe": i.get("forwardPE"), "pb_ratio": i.get("priceToBook"),
-                "dividend_yield": i.get("dividendYield"), "beta": i.get("beta"),
-                "52w_high": i.get("fiftyTwoWeekHigh"), "52w_low": i.get("fiftyTwoWeekLow"),
-                "avg_volume": i.get("averageVolume"),
-            }
-        return await loop.run_in_executor(None, _sync)
+        return {**data, "_source": self._free.name}
 
     # ════════════════════════════════════════════════════════════════════
-    # PRICE SNAPSHOT  (FD, Redis 15 min — no PG; cheap to re-fetch)
+    # PRICE SNAPSHOT  (paid provider, Redis 15 min — no PG; cheap to re-fetch)
     # ════════════════════════════════════════════════════════════════════
     async def get_price_snapshot(self, ticker: str, force: bool = False) -> dict:
         key = _price_snap_key(ticker)
@@ -384,13 +338,13 @@ class DataService:
             cached = await self.cache.get(key)
             if cached:
                 return json.loads(cached)
-        raw = await self._fd("/prices/snapshot/", {"ticker": ticker})
+        raw = await self._paid.get_price_snapshot(ticker)
         if raw:
             await self.cache.set(key, json.dumps(raw), settings.CACHE_PRICE_SNAPSHOT_TTL)
         return raw
 
     # ════════════════════════════════════════════════════════════════════
-    # EARNINGS CALENDAR  (FD, Redis 1 hr — no PG; cheap to re-fetch)
+    # EARNINGS CALENDAR  (paid provider, Redis 1 hr — no PG; cheap to re-fetch)
     # ════════════════════════════════════════════════════════════════════
     async def get_earnings(self, ticker: str) -> dict:
         key    = _earnings_key(ticker)
@@ -398,17 +352,14 @@ class DataService:
         if cached:
             return json.loads(cached)
         log.info("PAID API CALL: earnings calendar for %s", ticker)
-        try:
-            r    = await self._fd_client.get("/earnings/", params={"ticker": ticker, "limit": 8})
-            data = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
-        except Exception as e:
-            log.error("Earnings error %s: %s", ticker, e)
-            data = {"error": str(e)}
+        data = await self._paid.get_earnings(ticker)
+        if not data:
+            data = {"error": "no data"}
         await self.cache.set(key, json.dumps(data), settings.CACHE_EARNINGS_TTL)
         return data
 
     # ════════════════════════════════════════════════════════════════════
-    # NEWS  (yfinance free, Redis 15 min — no PG)
+    # NEWS  (free provider, Redis 15 min — no PG)
     # ════════════════════════════════════════════════════════════════════
     async def get_news(self, ticker: str) -> list[dict]:
         key    = f"news:{ticker.upper()}"
@@ -416,35 +367,12 @@ class DataService:
         if cached:
             return json.loads(cached)
 
-        loop = asyncio.get_event_loop()
-        def _sync():
-            raw_news = yf.Ticker(ticker).news or []
-            result   = []
-            for item in raw_news[:15]:
-                content  = item.get("content") or {}
-                if content:
-                    title    = content.get("title", "")
-                    provider = (content.get("provider") or {}).get("displayName", "")
-                    url_obj  = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
-                    url      = url_obj.get("url", "")
-                    pub_date = (content.get("pubDate") or "")[:10]
-                else:
-                    title    = item.get("title", "")
-                    provider = item.get("publisher", "")
-                    url      = item.get("link", "")
-                    ts       = item.get("providerPublishTime", 0)
-                    pub_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") if ts else ""
-                if title:
-                    result.append({"ticker": ticker.upper(), "headline": title,
-                                   "source": provider, "url": url, "date": pub_date})
-            return result
-
-        news = await loop.run_in_executor(None, _sync)
+        news = [dict(item) for item in await self._free.get_news(ticker)]
         await self.cache.set(key, json.dumps(news), settings.CACHE_NEWS_TTL)
         return news
 
     # ════════════════════════════════════════════════════════════════════
-    # TTM FUNDAMENTALS  (FD, Redis 24 hr + Postgres cache_fundamentals)
+    # TTM FUNDAMENTALS  (paid provider, Redis 24 hr + Postgres cache_fundamentals)
     # Legacy method — kept for portfolio/market routers. Uses the old
     # cache_fundamentals table (not the new generic cache_dataset).
     # ════════════════════════════════════════════════════════════════════
@@ -463,50 +391,19 @@ class DataService:
                 return {**pg_cached, "_source": "cache_pg"}
 
         log.info("PAID API CALL: TTM fundamentals for %s (force=%s)", ticker, force_refresh)
-        data = await self._fetch_fundamentals_fd(ticker)
+        data = await self._paid.get_fundamentals_ttm(ticker)
 
         if "error" not in data:
-            data["yf_enrichment"] = await self._fetch_profile_yfinance(ticker)
+            # Enrich with profile data from free provider
+            profile = dict(await self._free.get_profile(ticker))
+            profile["52w_high"] = profile.pop("high_52w", None)
+            profile["52w_low"]  = profile.pop("low_52w", None)
+            data["yf_enrichment"] = profile
             data["fetched_at"]    = datetime.now(timezone.utc).isoformat()
             await self.cache.set(key, json.dumps(data), settings.CACHE_FUNDAMENTALS_TTL)
             await self._upsert_pg_fundamentals(ticker, data)
 
-        return {**data, "_source": "financialdatasets"}
-
-    async def _fetch_fundamentals_fd(self, ticker: str) -> dict:
-        try:
-            inc_r, cf_r, bal_r = await asyncio.gather(
-                self._fd_client.get("/financials/income-statements/",   {"ticker": ticker, "period": "ttm", "limit": 1}),
-                self._fd_client.get("/financials/cash-flow-statements/",{"ticker": ticker, "period": "ttm", "limit": 1}),
-                self._fd_client.get("/financials/balance-sheets/",      {"ticker": ticker, "period": "ttm", "limit": 1}),
-            )
-            for label, r in [("income", inc_r), ("cashflow", cf_r), ("balance", bal_r)]:
-                if r.status_code not in (200, 201):
-                    raise ValueError(f"FD {label} HTTP {r.status_code}")
-
-            income   = inc_r.json().get("income_statements",    [{}])[0]
-            cashflow = cf_r.json().get("cash_flow_statements",  [{}])[0]
-            balance  = bal_r.json().get("balance_sheets",       [{}])[0]
-            rev      = income.get("revenue", 1) or 1
-            net_inc  = income.get("net_income", 0) or 0
-            ebit     = income.get("operating_income", 0) or 0
-            ebitda   = income.get("ebitda", 0) or 0
-            fcf      = cashflow.get("free_cash_flow", 0) or 0
-            return {
-                "ticker": ticker.upper(), "revenue": rev, "net_income": net_inc,
-                "ebit": ebit, "ebitda": ebitda, "free_cash_flow": fcf,
-                "ni_margin":    round(net_inc / rev * 100, 2),
-                "ebit_margin":  round(ebit    / rev * 100, 2),
-                "ebitda_margin":round(ebitda  / rev * 100, 2),
-                "fcf_margin":   round(fcf     / rev * 100, 2),
-                "total_assets": balance.get("total_assets"),
-                "total_debt":   balance.get("total_debt"),
-                "cash":         balance.get("cash_and_equivalents"),
-                "raw_income":   income, "raw_cashflow": cashflow, "raw_balance": balance,
-            }
-        except Exception as e:
-            log.error("fundamentals FD error for %s: %s", ticker, e)
-            return {"ticker": ticker, "error": str(e)}
+        return {**data, "_source": self._paid.name}
 
     async def _get_pg_fundamentals(self, ticker: str) -> dict | None:
         """Isolated-session read from cache_fundamentals."""
@@ -533,13 +430,13 @@ class DataService:
             stmt = (
                 pg_insert(CacheFundamentals)
                 .values(
-                    ticker=ticker.upper(), source="financialdatasets",
+                    ticker=ticker.upper(), source=self._paid.name,
                     data=data, period="ttm",
                     fetched_at=now, expires_at=expires,
                 )
                 .on_conflict_do_update(
                     index_elements=["ticker"],
-                    set_={"data": data, "source": "financialdatasets",
+                    set_={"data": data, "source": self._paid.name,
                           "fetched_at": now, "expires_at": expires},
                 )
             )
@@ -550,7 +447,7 @@ class DataService:
             log.error("PG upsert error fundamentals %s: %s", ticker, e)
 
     # ════════════════════════════════════════════════════════════════════
-    # COMPANY FACTS  (FD, Redis 7d + PG 7d)
+    # COMPANY FACTS  (paid provider, Redis 7d + PG 7d)
     # ════════════════════════════════════════════════════════════════════
     async def get_company_facts(self, ticker: str, force: bool = False) -> dict:
         return await self._get_cached(
@@ -560,11 +457,12 @@ class DataService:
             redis_ttl    = settings.CACHE_COMPANY_FACTS_TTL,
             pg_ttl       = _PG_TTL["company_facts"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/company/facts/", {"ticker": ticker}),
+            fetch_fn     = lambda: self._paid.get_company_facts(ticker),
+            source       = self._paid.name,
         )
 
     # ════════════════════════════════════════════════════════════════════
-    # METRICS SNAPSHOT  (FD, Redis 1hr + PG 24hr)
+    # METRICS SNAPSHOT  (paid provider, Redis 1hr + PG 24hr)
     # ════════════════════════════════════════════════════════════════════
     async def get_metrics_snapshot(self, ticker: str, force: bool = False) -> dict:
         return await self._get_cached(
@@ -574,11 +472,12 @@ class DataService:
             redis_ttl    = settings.CACHE_METRICS_SNAPSHOT_TTL,
             pg_ttl       = _PG_TTL["metrics_snapshot"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/financial-metrics/snapshot/", {"ticker": ticker}),
+            fetch_fn     = lambda: self._paid.get_metrics_snapshot(ticker),
+            source       = self._paid.name,
         )
 
     # ════════════════════════════════════════════════════════════════════
-    # FINANCIALS  (FD, Redis 30d + PG 30d for annual/quarterly;
+    # FINANCIALS  (paid provider, Redis 30d + PG 30d for annual/quarterly;
     #              Redis 24hr + PG 24hr for TTM)
     # ════════════════════════════════════════════════════════════════════
     async def get_financials_annual(self, ticker: str, force: bool = False) -> dict:
@@ -589,8 +488,8 @@ class DataService:
             redis_ttl    = settings.CACHE_FINANCIALS_TTL,
             pg_ttl       = _PG_TTL["financials_annual"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/financials/",
-                                            {"ticker": ticker, "period": "annual", "limit": 10}),
+            fetch_fn     = lambda: self._paid.get_financials(ticker, "annual", 10),
+            source       = self._paid.name,
         )
 
     async def get_financials_quarterly(self, ticker: str, force: bool = False) -> dict:
@@ -601,8 +500,8 @@ class DataService:
             redis_ttl    = settings.CACHE_FINANCIALS_TTL,
             pg_ttl       = _PG_TTL["financials_quarterly"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/financials/",
-                                            {"ticker": ticker, "period": "quarterly", "limit": 20}),
+            fetch_fn     = lambda: self._paid.get_financials(ticker, "quarterly", 20),
+            source       = self._paid.name,
         )
 
     async def get_financials_ttm(self, ticker: str, force: bool = False) -> dict:
@@ -613,12 +512,12 @@ class DataService:
             redis_ttl    = settings.CACHE_FUNDAMENTALS_TTL,
             pg_ttl       = _PG_TTL["financials_ttm"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/financials/",
-                                            {"ticker": ticker, "period": "ttm", "limit": 1}),
+            fetch_fn     = lambda: self._paid.get_financials(ticker, "ttm", 1),
+            source       = self._paid.name,
         )
 
     # ════════════════════════════════════════════════════════════════════
-    # METRICS HISTORY  (FD, Redis 30d + PG 30d)
+    # METRICS HISTORY  (paid provider, Redis 30d + PG 30d)
     # ════════════════════════════════════════════════════════════════════
     async def get_metrics_history_annual(self, ticker: str, force: bool = False) -> dict:
         return await self._get_cached(
@@ -628,8 +527,8 @@ class DataService:
             redis_ttl    = settings.CACHE_METRICS_HISTORY_TTL,
             pg_ttl       = _PG_TTL["metrics_hist_annual"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/financial-metrics/",
-                                            {"ticker": ticker, "period": "annual", "limit": 10}),
+            fetch_fn     = lambda: self._paid.get_metrics_history(ticker, "annual", 10),
+            source       = self._paid.name,
         )
 
     async def get_metrics_history_quarterly(self, ticker: str, force: bool = False) -> dict:
@@ -640,12 +539,12 @@ class DataService:
             redis_ttl    = settings.CACHE_METRICS_HISTORY_TTL,
             pg_ttl       = _PG_TTL["metrics_hist_quarterly"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/financial-metrics/",
-                                            {"ticker": ticker, "period": "quarterly", "limit": 20}),
+            fetch_fn     = lambda: self._paid.get_metrics_history(ticker, "quarterly", 20),
+            source       = self._paid.name,
         )
 
     # ════════════════════════════════════════════════════════════════════
-    # INSTITUTIONAL OWNERSHIP  (FD, Redis 7d + PG 7d)
+    # INSTITUTIONAL OWNERSHIP  (paid provider, Redis 7d + PG 7d)
     # ════════════════════════════════════════════════════════════════════
     async def get_institutional_ownership(self, ticker: str, force: bool = False) -> dict:
         return await self._get_cached(
@@ -655,12 +554,12 @@ class DataService:
             redis_ttl    = settings.CACHE_OWNERSHIP_TTL,
             pg_ttl       = _PG_TTL["ownership"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/institutional-ownership/",
-                                            {"ticker": ticker, "limit": 15}),
+            fetch_fn     = lambda: self._paid.get_institutional_ownership(ticker),
+            source       = self._paid.name,
         )
 
     # ════════════════════════════════════════════════════════════════════
-    # ANALYST ESTIMATES  (FD, Redis 24hr + PG 24hr)
+    # ANALYST ESTIMATES  (paid provider, Redis 24hr + PG 24hr)
     # ════════════════════════════════════════════════════════════════════
     async def get_analyst_estimates_annual(self, ticker: str, force: bool = False) -> dict:
         return await self._get_cached(
@@ -670,8 +569,8 @@ class DataService:
             redis_ttl    = settings.CACHE_ESTIMATES_TTL,
             pg_ttl       = _PG_TTL["estimates_annual"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/analyst-estimates/",
-                                            {"ticker": ticker, "period": "annual"}),
+            fetch_fn     = lambda: self._paid.get_analyst_estimates(ticker, "annual"),
+            source       = self._paid.name,
         )
 
     async def get_analyst_estimates_quarterly(self, ticker: str, force: bool = False) -> dict:
@@ -682,12 +581,12 @@ class DataService:
             redis_ttl    = settings.CACHE_ESTIMATES_TTL,
             pg_ttl       = _PG_TTL["estimates_quarterly"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/analyst-estimates/",
-                                            {"ticker": ticker, "period": "quarterly"}),
+            fetch_fn     = lambda: self._paid.get_analyst_estimates(ticker, "quarterly"),
+            source       = self._paid.name,
         )
 
     # ════════════════════════════════════════════════════════════════════
-    # INSIDER TRADES  (FD, Redis 24hr + PG 24hr)
+    # INSIDER TRADES  (paid provider, Redis 24hr + PG 24hr)
     # Returns list[dict] — wraps/unwraps {"insider_trades": [...]} in PG.
     # ════════════════════════════════════════════════════════════════════
     async def get_insider_trades(self, ticker: str, force: bool = False) -> list[dict]:
@@ -712,22 +611,18 @@ class DataService:
         else:
             log.info("PAID API CALL: insider trades for %s (force_refresh)", sym)
 
-        try:
-            r      = await self._fd_client.get("/insider-trades/",
-                                               params={"ticker": ticker, "limit": 30})
-            trades = r.json().get("insider_trades", []) if r.status_code == 200 else []
-        except Exception as e:
-            log.error("Insider trades error %s: %s", ticker, e)
-            trades = []
-
+        trades = await self._paid.get_insider_trades(ticker)
         await self.cache.set(key, json.dumps(trades), settings.CACHE_INSIDER_TTL)
         # Wrap in dict for generic PG storage
-        await self._upsert_pg_dataset(key, "insider_trades", sym,
-                                      {"insider_trades": trades}, _PG_TTL["insider_trades"])
+        await self._upsert_pg_dataset(
+            key, "insider_trades", sym,
+            {"insider_trades": trades}, _PG_TTL["insider_trades"],
+            source=self._paid.name,
+        )
         return trades
 
     # ════════════════════════════════════════════════════════════════════
-    # SEGMENTED REVENUES  (FD, Redis 30d + PG 30d)
+    # SEGMENTED REVENUES  (paid provider, Redis 30d + PG 30d)
     # ════════════════════════════════════════════════════════════════════
     async def get_segmented_revenues(self, ticker: str, force: bool = False) -> dict:
         return await self._get_cached(
@@ -737,8 +632,8 @@ class DataService:
             redis_ttl    = settings.CACHE_SEGMENTS_TTL,
             pg_ttl       = _PG_TTL["segments"],
             force        = force,
-            fetch_fn     = lambda: self._fd("/financials/segmented-revenues/",
-                                            {"ticker": ticker, "period": "annual", "limit": 5}),
+            fetch_fn     = lambda: self._paid.get_segmented_revenues(ticker),
+            source       = self._paid.name,
         )
 
     # ════════════════════════════════════════════════════════════════════

@@ -11,6 +11,7 @@ import { useAuth } from "@/components/AuthProvider";
 import SearchAutocomplete from "@/components/research/SearchAutocomplete";
 import MarketStatusBadge from "@/components/MarketStatusBadge";
 import { Portfolio } from "@/lib/api";
+import { MarketStatus } from "@/lib/marketCalendar";
 
 const tierBadge: Record<string, string> = {
   free: "bg-zinc-700 text-zinc-300",
@@ -31,6 +32,7 @@ interface Props {
   refreshing?: boolean;
   onAddPosition?: () => void;
   onSimulatorOpen?: () => void;
+  marketStatus?: MarketStatus | null;
 }
 
 export default function GlobalHeader({
@@ -43,6 +45,7 @@ export default function GlobalHeader({
   refreshing = false,
   onAddPosition,
   onSimulatorOpen,
+  marketStatus = null,
 }: Props) {
   const { user, logout } = useAuth();
   const router = useRouter();
@@ -200,7 +203,7 @@ export default function GlobalHeader({
         <div className="flex items-center gap-2">
 
           {/* Market status */}
-          <MarketStatusBadge />
+          <MarketStatusBadge status={marketStatus} />
 
           {/* Global search */}
           <div className="hidden sm:block w-52">

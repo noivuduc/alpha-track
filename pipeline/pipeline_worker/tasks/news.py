@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-import yfinance as yf
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal, Cache
@@ -20,12 +20,14 @@ from app.pipeline.registry import (
     get_tickers_needing_news_refresh,
     mark_news_refreshed,
 )
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from app.providers import YahooFinanceProvider
 
 log      = logging.getLogger(__name__)
 settings = get_settings()
 
 _CONCURRENCY = 4
+
+_yf = YahooFinanceProvider()
 
 
 async def refresh_news(ctx: dict) -> None:
@@ -53,36 +55,7 @@ async def refresh_news(ctx: dict) -> None:
 
 
 async def _fetch_and_store_news(cache: Cache, ticker: str) -> None:
-    loop = asyncio.get_event_loop()
-
-    def _sync() -> list[dict]:
-        raw_news = yf.Ticker(ticker).news or []
-        result: list[dict] = []
-        for item in raw_news[:15]:
-            content = item.get("content") or {}
-            if content:
-                title    = content.get("title", "")
-                provider = (content.get("provider") or {}).get("displayName", "")
-                url_obj  = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
-                url      = url_obj.get("url", "")
-                pub_date = (content.get("pubDate") or "")[:10]
-            else:
-                title    = item.get("title", "")
-                provider = item.get("publisher", "")
-                url      = item.get("link", "")
-                ts       = item.get("providerPublishTime", 0)
-                pub_date = (
-                    datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    if ts else ""
-                )
-            if title:
-                result.append({
-                    "ticker": ticker.upper(), "headline": title,
-                    "source": provider, "url": url, "date": pub_date,
-                })
-        return result
-
-    news = await loop.run_in_executor(None, _sync)
+    news = [dict(item) for item in await _yf.get_news(ticker)]
 
     redis_key = f"news:{ticker.upper()}"
     await cache.set(redis_key, json.dumps(news), settings.CACHE_NEWS_TTL)

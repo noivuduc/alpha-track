@@ -16,19 +16,21 @@ import DatePicker from "@/components/ui/DatePicker";
 // ── Module-level sector cache (survives re-renders) ────────────────────────────
 const _sectorCache: Record<string, string | null> = {};
 
-async function fetchSector(ticker: string): Promise<string | null> {
-  if (ticker in _sectorCache) return _sectorCache[ticker];
+/** Batch-fetch sectors for tickers not already in cache. Returns updated map. */
+async function fetchSectorsBatch(tickers: string[]): Promise<void> {
+  const toFetch = tickers.filter(t => !(t in _sectorCache));
+  if (!toFetch.length) return;
+
   try {
-    const p = await market.profile(ticker) as Record<string, unknown>;
-    const s = (p?.sector ?? p?.Sector) as string | undefined ?? null;
-    _sectorCache[ticker] = s;   // cache success (even null = "ticker has no sector")
-    return s;
-  } catch (e) {
-    // Auth / transient errors: do NOT cache so the next render retries after login
-    const status = (e as { status?: number })?.status;
-    if (!status || status >= 400) return null;
-    _sectorCache[ticker] = null;
-    return null;
+    const { data } = await market.profiles(toFetch);
+    for (const ticker of toFetch) {
+      const p = data[ticker];
+      _sectorCache[ticker] = p
+        ? ((p.sector ?? p.Sector) as string | undefined ?? null)
+        : null;
+    }
+  } catch {
+    // Transient error — leave tickers out of cache so next render retries
   }
 }
 
@@ -875,8 +877,7 @@ export default function HoldingsTab({ portfolioId, data, analytics, livePrices, 
 
   useEffect(() => {
     if (!data.length) return;
-    const tickers  = data.map(p => p.ticker);
-    const toFetch  = tickers.filter(t => !(t in _sectorCache));
+    const tickers = data.map(p => p.ticker);
 
     const applyCache = () => {
       const m: Record<string, string> = {};
@@ -886,8 +887,8 @@ export default function HoldingsTab({ portfolioId, data, analytics, livePrices, 
       setSectorMap(m);
     };
 
-    if (!toFetch.length) { applyCache(); return; }
-    Promise.allSettled(toFetch.map(t => fetchSector(t))).then(applyCache);
+    // Single batch request for all uncached tickers
+    fetchSectorsBatch(tickers).then(applyCache);
   }, [data]);
 
   // ── Add transaction form ───────────────────────────────────────────────────

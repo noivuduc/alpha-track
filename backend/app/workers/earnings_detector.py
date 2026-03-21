@@ -15,15 +15,13 @@ Each DB write uses its own isolated session.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
-
-import yfinance as yf
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal, Cache
 from app.models import EarningsSchedule
+from app.providers import YahooFinanceProvider
 from app.workers.registry import get_tracked_tickers
 
 log      = logging.getLogger(__name__)
@@ -31,6 +29,9 @@ settings = get_settings()
 
 _DELAY_DAYS    = settings.FUNDAMENTALS_REFRESH_DELAY_DAYS   # 2
 _FALLBACK_DAYS = settings.FUNDAMENTALS_FALLBACK_TTL_DAYS     # 30
+
+# Module-level provider (stateless, reusable)
+_provider = YahooFinanceProvider()
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -42,40 +43,15 @@ async def run_once(cache: Cache) -> None:
         return
 
     log.info("earnings_detector: scanning %d tickers", len(tickers))
-    loop = asyncio.get_event_loop()
 
     for ticker in tickers:
         try:
-            earnings_date = await loop.run_in_executor(None, _latest_earnings_yf, ticker)
+            earnings_date = await _provider.get_earnings_dates(ticker)
             await _update_schedule(ticker, earnings_date)
         except Exception as e:
             log.warning("earnings_detector error for %s: %s", ticker, e)
 
     log.info("earnings_detector: scan complete")
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _latest_earnings_yf(ticker: str) -> date | None:
-    """
-    Return the most recent past earnings date from yfinance.earnings_dates.
-    Returns None if unavailable.
-    """
-    try:
-        import pandas as pd
-        t       = yf.Ticker(ticker)
-        ed      = t.earnings_dates
-        if ed is None or ed.empty:
-            return None
-        today   = pd.Timestamp.today(tz="UTC")
-        past    = ed[ed.index <= today]
-        if past.empty:
-            return None
-        latest  = past.index[0]
-        return latest.date() if hasattr(latest, "date") else None
-    except Exception as e:
-        log.debug("yfinance earnings_dates error for %s: %s", ticker, e)
-        return None
 
 
 async def _update_schedule(ticker: str, earnings_date: date | None) -> None:

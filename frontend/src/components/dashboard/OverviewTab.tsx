@@ -23,6 +23,9 @@ interface Props {
   period:           string;
   analysis?:        PortfolioAnalysisResponse | null;
   livePrices?:      Record<string, PriceUpdate>;
+  isStreaming?:     boolean;
+  nextRefreshIn?:   number | null;
+  lastFetchedAt?:   Date | null;
   onOpenSimulator?: (ticker: string) => void;
 }
 
@@ -480,12 +483,19 @@ function NewsItem({ item }: { item: PortfolioNewsItem }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-export default function OverviewTab({ analytics: a, positions, loading, analysis, livePrices, onOpenSimulator }: Props) {
+export default function OverviewTab({ analytics: a, positions, loading, analysis, livePrices, isStreaming, nextRefreshIn, lastFetchedAt, onOpenSimulator }: Props) {
   const [range, setRange] = useState<Range>("1Y");
 
-  // Overlay live prices on analytics summary when available
+  /** Cost basis from positions — available before analytics finishes loading */
+  const costFromPositions = useMemo(
+    () => (positions.length ? positions.reduce((s, p) => s + p.shares * p.cost_basis, 0) : 0),
+    [positions],
+  );
+
+  // Overlay live SSE prices on summary when at least one ticker has a live quote.
+  // Does not require `analytics` so the header updates before /analytics returns.
   const live = useMemo(() => {
-    if (!a || !livePrices || Object.keys(livePrices).length === 0) return null;
+    if (!positions.length || !livePrices || Object.keys(livePrices).length === 0) return null;
     let totalValue = 0;
     let dayChange  = 0;
     let hasLive    = false;
@@ -503,18 +513,48 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
 
     if (!hasLive) return null;
 
-    const totalCost   = a.total_cost;
-    const totalGain   = totalValue - totalCost;
+    const totalCost =
+      a && a.total_cost > 0
+        ? a.total_cost
+        : costFromPositions > 0
+          ? costFromPositions
+          : 0;
+    const totalGain   = totalCost > 0 ? totalValue - totalCost : 0;
     const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
     const prevValue    = totalValue - dayChange;
     const dayGainPct   = prevValue > 0 ? (dayChange / prevValue) * 100 : 0;
 
     return { totalValue, totalGain, totalGainPct, dayGain: dayChange, dayGainPct };
-  }, [a, positions, livePrices]);
+  }, [a, positions, livePrices, costFromPositions]);
 
-  const displayValue    = live?.totalValue    ?? a?.total_value;
-  const displayGain     = live?.totalGain     ?? a?.total_gain;
-  const displayGainPct  = live?.totalGainPct  ?? a?.total_gain_pct;
+  /** When analytics is missing or used cost_basis for all marks, prefer position marks */
+  const positionSnapshot = useMemo(() => {
+    if (!positions.length) return null;
+    const tv = positions.reduce((s, p) => s + (p.current_value ?? p.shares * p.cost_basis), 0);
+    const tc = costFromPositions;
+    if (tc <= 0 && tv <= 0) return null;
+    const tg = positions.reduce((s, p) => s + (p.gain_loss ?? 0), 0);
+    return { totalValue: tv, totalCost: tc, totalGain: tg, totalGainPct: tc > 0 ? (tg / tc) * 100 : 0 };
+  }, [positions, costFromPositions]);
+
+  /** Prefer per-position marks when analytics is still loading or shows $0 gains while positions have real P&L (stale cache / cold Redis). */
+  const usePositionSnapshot =
+    !!positionSnapshot &&
+    (a == null ||
+      (a.total_gain === 0 &&
+        a.day_gain === 0 &&
+        (Math.abs(positionSnapshot.totalGain) > 0.01 ||
+          positionSnapshot.totalValue > a.total_cost + 0.01)));
+
+  const displayValue =
+    live?.totalValue ??
+    (usePositionSnapshot ? positionSnapshot!.totalValue : a?.total_value);
+  const displayGain =
+    live?.totalGain ??
+    (usePositionSnapshot ? positionSnapshot!.totalGain : a?.total_gain);
+  const displayGainPct =
+    live?.totalGainPct ??
+    (usePositionSnapshot ? positionSnapshot!.totalGainPct : a?.total_gain_pct);
   const displayDayGain  = live?.dayGain       ?? a?.day_gain;
   const displayDayPct   = live?.dayGainPct    ?? a?.day_gain_pct;
 
@@ -606,9 +646,31 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
       )}
 
       {/* Row 1 — Summary cards */}
+      {/* Prices badge: LIVE dot during market hours, countdown when closed */}
+      {live && (
+        <div className="flex items-center gap-3 -mb-1">
+          {isStreaming ? (
+            <span className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              LIVE
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-[11px] text-zinc-500 font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
+              {nextRefreshIn != null && nextRefreshIn > 0
+                ? `refreshes in ${nextRefreshIn >= 60
+                    ? `${Math.floor(nextRefreshIn / 60)}m${nextRefreshIn % 60 > 0 ? ` ${nextRefreshIn % 60}s` : ""}`
+                    : `${nextRefreshIn}s`}`
+                : lastFetchedAt
+                  ? `updated ${lastFetchedAt.toLocaleTimeString()}`
+                  : "prices cached"}
+            </span>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          label={live ? "Portfolio Value ●" : "Portfolio Value"}
+          label="Portfolio Value"
           value={fmtCurrency(displayValue)}
           sub={ytdPct != null ? `${fmtPctVal(ytdPct)} YTD` : undefined}
           positive={ytdPct != null ? ytdPct >= 0 : undefined}
@@ -617,14 +679,14 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
           tooltip={valueTooltip}
         />
         <StatCard
-          label={live ? "Total Gain ●" : "Total Gain"}
+          label="Total Gain"
           value={fmtCurrency(displayGain)}
           sub={displayGainPct != null ? fmtPctVal(displayGainPct) : undefined}
           positive={gainPositive}
           icon={gainPositive ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
         />
         <StatCard
-          label={live ? "Day Gain ●" : "Day Gain"}
+          label="Day Gain"
           value={fmtCurrency(displayDayGain)}
           sub={displayDayPct != null ? fmtPctVal(displayDayPct) : undefined}
           positive={dayPositive}

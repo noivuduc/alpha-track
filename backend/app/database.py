@@ -77,6 +77,13 @@ class Cache:
     async def get(self, key: str) -> str | None:
         return await self.r.get(f"alphadesk:{key}")
 
+    async def mget(self, keys: list[str]) -> list[str | None]:
+        """Fetch multiple keys in a single Redis round-trip."""
+        if not keys:
+            return []
+        prefixed = [f"alphadesk:{k}" for k in keys]
+        return await self.r.mget(*prefixed)
+
     async def set(self, key: str, value: str, ttl: int):
         await self.r.setex(f"alphadesk:{key}", ttl, value)
 
