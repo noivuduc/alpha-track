@@ -66,6 +66,28 @@ function filterByRange<T extends { date: string }>(data: T[], range: Range): T[]
   return data.filter(d => new Date(d.date) >= cutoff);
 }
 
+/**
+ * Re-normalise chart series so the first visible point is always 100.
+ * The backend indexes to 100 at portfolio inception, so on any sub-range
+ * (e.g. YTD) the y-values don't start at 100 — causing users to confuse
+ * the absolute index value (e.g. 115.2) with a period return (+15.2%).
+ */
+type PerfPoint = { date: string; portfolio?: number; spy?: number; qqq?: number };
+function rebaseToRange(data: PerfPoint[]): PerfPoint[] {
+  if (!data.length) return data;
+  const first = data[0];
+  const bp = first.portfolio ?? 0;
+  const bs = first.spy       ?? 0;
+  const bq = first.qqq       ?? 0;
+  if (!bp) return data;
+  return data.map(pt => ({
+    ...pt,
+    portfolio: pt.portfolio != null ? Math.round((pt.portfolio / bp) * 10000) / 100 : undefined,
+    spy:       (pt.spy != null && bs > 0) ? Math.round((pt.spy / bs) * 10000) / 100 : undefined,
+    qqq:       (pt.qqq != null && bq > 0) ? Math.round((pt.qqq / bq) * 10000) / 100 : undefined,
+  }));
+}
+
 function sharpeLabel(v: number): { label: string; colorClass: string } {
   if (v >= 2)   return { label: "Excellent", colorClass: "text-emerald-400" };
   if (v >= 1)   return { label: "Good",      colorClass: "text-emerald-500" };
@@ -450,6 +472,7 @@ function RollingReturnsTable({ data }: {
 // ── Row 6: Portfolio News ──────────────────────────────────────────────────────
 
 function NewsItem({ item }: { item: PortfolioNewsItem }) {
+  const text = item.title || item.headline || "";
   return (
     <div className="flex items-start gap-3 py-3 border-b border-zinc-800/60 last:border-0">
       <div className="shrink-0 mt-0.5">
@@ -465,11 +488,11 @@ function NewsItem({ item }: { item: PortfolioNewsItem }) {
             rel="noopener noreferrer"
             className="text-xs text-zinc-200 hover:text-blue-400 transition-colors leading-snug line-clamp-2 flex items-start gap-1 group"
           >
-            {item.headline}
+            {text}
             <ExternalLink size={10} className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity" />
           </a>
         ) : (
-          <p className="text-xs text-zinc-200 leading-snug line-clamp-2">{item.headline}</p>
+          <p className="text-xs text-zinc-200 leading-snug line-clamp-2">{text}</p>
         )}
         <div className="flex items-center gap-2 mt-1">
           {item.source && <span className="text-[10px] text-zinc-500">{item.source}</span>}
@@ -493,8 +516,11 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
   );
 
   // Overlay live SSE prices on summary when at least one ticker has a live quote.
-  // Does not require `analytics` so the header updates before /analytics returns.
+  // Only active during trading hours — polling prices (market closed) are too
+  // noisy to recompute gains from: each fetch may return slightly different
+  // `change` values due to the backend's Redis→Postgres→history fallback chain.
   const live = useMemo(() => {
+    if (!isStreaming) return null;
     if (!positions.length || !livePrices || Object.keys(livePrices).length === 0) return null;
     let totalValue = 0;
     let dayChange  = 0;
@@ -525,7 +551,7 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
     const dayGainPct   = prevValue > 0 ? (dayChange / prevValue) * 100 : 0;
 
     return { totalValue, totalGain, totalGainPct, dayGain: dayChange, dayGainPct };
-  }, [a, positions, livePrices, costFromPositions]);
+  }, [a, positions, livePrices, costFromPositions, isStreaming]);
 
   /** When analytics is missing or used cost_basis for all marks, prefer position marks */
   const positionSnapshot = useMemo(() => {
@@ -564,9 +590,10 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
   const dm           = a?.derived_metrics;
   const rollingRet   = a?.rolling_returns;
 
-  // Chart data — prefer new `performance` series (already indexed to 100)
+  // Chart data — filter by range then re-base to 100 at the start of that range
+  // so the y-axis directly shows % return relative to the selected period start.
   const allPerf   = (a?.performance ?? []).map(p => ({ date: p.date, portfolio: p.portfolio, spy: p.spy, qqq: p.qqq }));
-  const chartData = filterByRange(allPerf, range);
+  const chartData = rebaseToRange(filterByRange(allPerf, range));
 
   // Contribution — prefer new analytics.contribution, fall back to position_summary
   const contribution: ContributionEntry[] = a?.contribution
@@ -766,6 +793,7 @@ export default function OverviewTab({ analytics: a, positions, loading, analysis
           weeklyReturns={a.weekly_returns ?? []}
           monthlyReturns={a.monthly_returns}
           periodExtremes={a.period_extremes}
+          currentYearYtd={a.rolling_returns?.return_ytd ?? null}
         />
       ) : null}
 

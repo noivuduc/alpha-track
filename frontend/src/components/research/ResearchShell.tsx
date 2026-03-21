@@ -2,33 +2,39 @@
 import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Menu, X } from "lucide-react";
+import { Menu, X, RefreshCw } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
-import { researchApi, ResearchData, PriceUpdate, market } from "@/lib/api";
+import {
+  researchApi, ResearchData, PriceUpdate, market,
+  OverviewSynthesis,
+} from "@/lib/api";
 import { usePriceStream } from "@/hooks/usePriceStream";
 
-import GlobalHeader        from "@/components/GlobalHeader";
-import SectionPanel        from "./SectionPanel";
-import ResearchHeader      from "./ResearchHeader";
-import CompanySummaryBar   from "./CompanySummaryBar";
-import KeyMetricsGrid      from "./KeyMetricsGrid";
-import OwnershipSection    from "./OwnershipSection";
-import EstimatesSection    from "./EstimatesSection";
-import NewsSection         from "./NewsSection";
-import RevenueSegmentation from "./RevenueSegmentation";
+import GlobalHeader          from "@/components/GlobalHeader";
+import SectionPanel          from "./SectionPanel";
+import ResearchHeader        from "./ResearchHeader";
+import CompanySummaryBar     from "./CompanySummaryBar";
+import CompanyOverviewCard   from "./CompanyOverviewCard";
+import ExecutiveSummaryCard  from "./ExecutiveSummaryCard";
+import KeyMetricsGrid        from "./KeyMetricsGrid";
+import OwnershipSection      from "./OwnershipSection";
+import EstimatesSection      from "./EstimatesSection";
+import NewsSection           from "./NewsSection";
+import RevenueSegmentation   from "./RevenueSegmentation";
 import GrowthProfitabilityScatter from "./GrowthProfitabilityScatter";
-import PeerComparison      from "./PeerComparison";
-import HistoricalValuation from "./HistoricalValuation";
-import EarningsReaction    from "./EarningsReaction";
-import InvestmentInsights  from "./InvestmentInsights";
-import FinancialSignals    from "./FinancialSignals";
-import AiAnalysis          from "./AiAnalysis";
-import AnalysisLayerBlock  from "./AnalysisLayer";
-import { PeerMetrics }     from "@/lib/api";
+import PeerComparison        from "./PeerComparison";
+import HistoricalValuation   from "./HistoricalValuation";
+import EarningsReaction      from "./EarningsReaction";
+import InvestmentInsights    from "./InvestmentInsights";
+import FinancialSignals      from "./FinancialSignals";
+import AiAnalysis            from "./AiAnalysis";
+import AnalysisLayerBlock    from "./AnalysisLayer";
+import { type SynthStatus }  from "./AnalysisLayer";
+import { PeerMetrics }       from "@/lib/api";
 
-const FinancialTrends         = dynamic(() => import("./FinancialTrends"),         { ssr: false });
-const FinancialStatements     = dynamic(() => import("./FinancialStatements"),     { ssr: false });
-const StockPriceChart         = dynamic(() => import("./StockPriceChart"),         { ssr: false });
+const FinancialTrends          = dynamic(() => import("./FinancialTrends"),          { ssr: false });
+const FinancialStatements      = dynamic(() => import("./FinancialStatements"),      { ssr: false });
+const StockPriceChart          = dynamic(() => import("./StockPriceChart"),          { ssr: false });
 const ResearchTradingViewChart = dynamic(() => import("./ResearchTradingViewChart"), { ssr: false });
 
 function fmtLarge(n: number | undefined | null): string {
@@ -39,7 +45,7 @@ function fmtLarge(n: number | undefined | null): string {
   return `$${n.toLocaleString()}`;
 }
 
-// ── Tab registry ──────────────────────────────────────────────────────────────
+// ── Tab registry ───────────────────────────────────────────────────────────────
 const PRIMARY_TABS = [
   { key: "overview",   label: "Overview"   },
   { key: "financials", label: "Financials" },
@@ -53,11 +59,11 @@ const MORE_TABS = [
   { key: "news",       label: "News"       },
 ] as const;
 
-const ALL_TABS = [...PRIMARY_TABS, ...MORE_TABS];
-type TabKey    = (typeof ALL_TABS)[number]["key"];
+const ALL_TABS  = [...PRIMARY_TABS, ...MORE_TABS];
+type  TabKey    = (typeof ALL_TABS)[number]["key"];
 const VALID_KEYS = ALL_TABS.map(t => t.key) as string[];
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── Component ──────────────────────────────────────────────────────────────────
 export default function ResearchShell({ ticker }: { ticker: string }) {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
@@ -71,9 +77,32 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
   const [livePrice,  setLivePrice]  = useState<PriceUpdate | null>(null);
   const [activeTab,  setActiveTab]  = useState<TabKey>("overview");
 
+  // ── Synthesis state (lifted from AnalysisLayer so exec summary
+  //    can live in the 2-column top split) ──────────────────────
+  const [synthesis,   setSynthesis]   = useState<OverviewSynthesis | null>(null);
+  const [synthStatus, setSynthStatus] = useState<SynthStatus>("idle");
+  const [refreshing,  setRefreshing]  = useState(false);
+
+  const loadSynthesis = useCallback(async (force = false) => {
+    setSynthStatus("loading");
+    try {
+      const result = await researchApi.overviewSynthesis(ticker, force);
+      setSynthesis(result);
+      setSynthStatus("ready");
+    } catch {
+      setSynthStatus("error");
+    }
+  }, [ticker]);
+
+  const handleSynthRefresh = async () => {
+    setRefreshing(true);
+    await loadSynthesis(true);
+    setRefreshing(false);
+  };
+
   const headerSentinelRef = useRef<HTMLDivElement>(null);
 
-  // Sync active tab from URL on mount (client-only)
+  // Sync active tab from URL on mount
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
     if (t && VALID_KEYS.includes(t)) setActiveTab(t as TabKey);
@@ -105,11 +134,17 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
   useEffect(() => {
     if (authLoading) return;
     if (!user) { router.push("/login"); return; }
-    // Kick off history seed immediately — don't wait for research data to finish
     market.prefetchHistory(ticker, "1y", "1d");
     setLoading(true);
     load(false).finally(() => setLoading(false));
   }, [authLoading, user, router, load, ticker]);
+
+  // Load synthesis once data is available
+  useEffect(() => {
+    if (!data) return;
+    loadSynthesis(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.computed_at, ticker]);
 
   // Close mobile drawer on lg+
   useEffect(() => {
@@ -118,7 +153,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
     return () => window.removeEventListener("resize", handler);
   }, []);
 
-  // ── Loading / error states ─────────────────────────────────────────────────
+  // ── Loading / error states ──────────────────────────────────────────────────
   if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
@@ -165,6 +200,17 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
   const hasEarnings   = earnings_history?.length > 0;
   const hasPeHistory  = valuation.pe_history.length > 0;
 
+  // Merge coverage for exec summary card
+  const coverage = {
+    ...(data.analysis_layer?.coverage ?? {
+      quote_available:         !!snapshot.price,
+      fundamentals_available:  "none" as const,
+      estimates_available:     "none" as const,
+      fresh_context_available: false,
+    }),
+    fresh_context_available: synthesis?.fresh_context_available ?? false,
+  };
+
   const selfMetrics: PeerMetrics = {
     symbol:           sym,
     name:             company.name,
@@ -195,7 +241,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
     </div>
   );
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50">
       <GlobalHeader showBack />
@@ -257,72 +303,88 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               </button>
             </div>
 
-            {/* ── OVERVIEW ─────────────────────────────────────────── */}
+            {/* ── OVERVIEW ──────────────────────────────────────────── */}
             {activeTab === "overview" && (
               <>
-                {/* Analysis Layer — sits above all evidence sections */}
+                {/* ── TOP: 2-column split ───────────────────────────── */}
+                {/* LEFT  → Executive Summary  (interpretation layer)   */}
+                {/* RIGHT → Company Overview   (contextual facts)       */}
+                {data.analysis_layer && (
+                  <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-6 items-stretch">
+
+                    {/* LEFT: Executive Summary */}
+                    <div className="flex flex-col">
+                      {synthStatus === "loading" && (
+                        <div className="flex-1 bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-4 flex items-center gap-3">
+                          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin shrink-0" />
+                          <span className="text-sm text-zinc-500">Generating AI summary…</span>
+                        </div>
+                      )}
+
+                      {synthStatus === "ready" && synthesis && (
+                        <ExecutiveSummaryCard
+                          synthesis={synthesis}
+                          coverage={coverage}
+                          onRefresh={handleSynthRefresh}
+                          refreshing={refreshing}
+                        />
+                      )}
+
+                      {synthStatus === "error" && (
+                        <div className="flex-1 bg-zinc-900/60 border border-zinc-800/60 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+                          <span className="text-sm text-zinc-500">AI summary unavailable right now.</span>
+                          <button
+                            onClick={() => loadSynthesis(false)}
+                            className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors shrink-0"
+                          >
+                            <RefreshCw size={11} />
+                            Retry
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Fallback while synthesis not yet triggered */}
+                      {synthStatus === "idle" && (
+                        <div className="flex-1 bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-4" />
+                      )}
+                    </div>
+
+                    {/* RIGHT: Compact Company Overview */}
+                    <CompanyOverviewCard company={company} profile={profile} />
+                  </div>
+                )}
+
+                {/* ── ANALYSIS LAYER: pillars → bottom ─────────────── */}
+                {/* Executive Summary was removed from AnalysisLayer.   */}
+                {/* This block renders: Pillars, Risk Flags, Why Now,   */}
+                {/* Sentiment Regime, Transparency Drawer.              */}
                 {data.analysis_layer && (
                   <AnalysisLayerBlock
                     ticker={sym}
                     analysisLayer={data.analysis_layer}
                     computedAt={data.computed_at}
+                    synthesis={synthesis}
+                    synthStatus={synthStatus}
+                    refreshing={refreshing}
                   />
                 )}
 
-                {(profile.description || company.sector) && (
-                  <SectionPanel title="Company Overview" id="sec-overview">
-                    <div className="space-y-4">
-                      {profile.description && (
-                        <p className="text-sm text-zinc-400 leading-relaxed">{profile.description}</p>
-                      )}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {company.sector           && <Info label="Sector"     value={company.sector} />}
-                        {company.industry         && <Info label="Industry"   value={company.industry} />}
-                        {company.exchange         && <Info label="Exchange"   value={company.exchange} />}
-                        {company.location         && <Info label="Location"   value={company.location} />}
-                        {profile.employees        && <Info label="Employees"  value={profile.employees.toLocaleString()} />}
-                        {profile.market_cap       && <Info label="Market Cap" value={fmtLarge(profile.market_cap)} />}
-                        {profile.enterprise_value && <Info label="Ent. Value" value={fmtLarge(profile.enterprise_value)} />}
-                        {profile.website && (
-                          <div className="bg-zinc-800/40 rounded-lg p-3">
-                            <div className="text-xs text-zinc-500 mb-1">Website</div>
-                            <a href={profile.website} target="_blank" rel="noopener noreferrer"
-                               className="text-xs text-blue-400 hover:underline break-all">
-                              {profile.website.replace(/^https?:\/\//, "")}
-                            </a>
-                          </div>
-                        )}
-                        {profile.currency && <Info label="Currency" value={profile.currency} />}
-                        {company.cik      && <Info label="CIK"      value={company.cik} />}
-                      </div>
-                      {profile.officers && profile.officers.length > 0 && (
-                        <div>
-                          <div className="text-xs font-semibold text-zinc-400 mb-2">Key Executives</div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                            {profile.officers.map((o, i) => (
-                              <div key={i} className="bg-zinc-800/40 rounded-lg px-3 py-2">
-                                <div className="text-sm text-zinc-200 font-medium">{o.name}</div>
-                                <div className="text-xs text-zinc-500">{o.title}</div>
-                                {o.pay && <div className="text-xs text-zinc-600 mt-0.5">Comp: ${(o.pay / 1e6).toFixed(1)}M</div>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </SectionPanel>
-                )}
-
-                <SectionPanel title="Key Metrics" id="sec-metrics">
+                {/* ── FINANCIAL SNAPSHOT (evidence layer) ─────────── */}
+                <SectionPanel title="Financial Snapshot" id="sec-metrics">
                   <KeyMetricsGrid data={data} />
                 </SectionPanel>
 
+                {/* ── INVESTMENT INSIGHTS (collapsed, supplemental) ── */}
+                {/* Kept for deeper bull case / catalyst detail but     */}
+                {/* collapsed to avoid repeating the exec summary.      */}
                 {analysis.insights && (
-                  <SectionPanel title="Investment Insights" id="sec-insights">
+                  <SectionPanel title="Investment Insights" defaultOpen={false} id="sec-insights">
                     <InvestmentInsights insights={analysis.insights} sections={["bull", "catalysts"]} />
                   </SectionPanel>
                 )}
 
+                {/* ── KEY RISKS (collapsed, supplemental) ────────────── */}
+                {/* Broader structural risks distinct from current flags. */}
                 {analysis.insights && (
                   <SectionPanel title="Key Risks" defaultOpen={false} id="sec-risks">
                     <InvestmentInsights insights={analysis.insights} sections={["bear", "risks"]} />
@@ -331,7 +393,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               </>
             )}
 
-            {/* ── FINANCIALS ───────────────────────────────────────── */}
+            {/* ── FINANCIALS ─────────────────────────────────────────── */}
             {activeTab === "financials" && (
               <>
                 {hasFinancials ? (
@@ -377,7 +439,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               </>
             )}
 
-            {/* ── VALUATION ────────────────────────────────────────── */}
+            {/* ── VALUATION ──────────────────────────────────────────── */}
             {activeTab === "valuation" && (
               <>
                 {hasPeHistory && (
@@ -407,15 +469,14 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               </>
             )}
 
-            {/* ── CHARTS ───────────────────────────────────────────── */}
-            {/* TradingView: conditionally rendered (needs visible container to size) */}
+            {/* ── CHARTS ─────────────────────────────────────────────── */}
             {activeTab === "charts" && (
               <SectionPanel title="Interactive Chart" id="sec-tv-chart">
                 <ResearchTradingViewChart ticker={sym} exchange={company.exchange} />
               </SectionPanel>
             )}
 
-            {/* StockPriceChart + EarningsReaction: always mounted (hidden) to preserve loaded data */}
+            {/* StockPriceChart + EarningsReaction: always mounted (hidden) */}
             <div className={activeTab === "charts" ? "flex flex-col gap-5" : "hidden"}>
               <SectionPanel title="Price History" id="sec-price">
                 <StockPriceChart ticker={ticker} />
@@ -428,14 +489,14 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               )}
             </div>
 
-            {/* ── AI ───────────────────────────────────────────────── */}
+            {/* ── AI ─────────────────────────────────────────────────── */}
             {activeTab === "ai" && (
               <SectionPanel title="AI Analysis" id="sec-ai">
                 <AiAnalysis ticker={sym} />
               </SectionPanel>
             )}
 
-            {/* ── OWNERSHIP ────────────────────────────────────────── */}
+            {/* ── OWNERSHIP ──────────────────────────────────────────── */}
             {activeTab === "ownership" && (
               <SectionPanel title="Ownership & Insider Transactions" id="sec-ownership">
                 <OwnershipSection
@@ -446,7 +507,7 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
               </SectionPanel>
             )}
 
-            {/* ── NEWS ─────────────────────────────────────────────── */}
+            {/* ── NEWS ───────────────────────────────────────────────── */}
             {activeTab === "news" && (
               news.length > 0 ? (
                 <SectionPanel title="Latest News" id="sec-news">
@@ -464,15 +525,6 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-zinc-800/40 rounded-lg p-3">
-      <div className="text-xs text-zinc-500 mb-1">{label}</div>
-      <div className="text-sm text-zinc-200 font-medium">{value}</div>
     </div>
   );
 }

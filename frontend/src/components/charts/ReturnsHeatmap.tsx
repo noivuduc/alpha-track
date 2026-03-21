@@ -20,6 +20,7 @@ interface Props {
   weeklyReturns:   WeeklyReturn[];
   monthlyReturns:  MonthlyReturn[];
   periodExtremes?: PeriodExtremes | null;
+  currentYearYtd?: number | null;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -362,7 +363,8 @@ function WeeklyGrid({ data, onTooltip }: GridProps<WeeklyReturn[]>) {
 // Column template: "36px repeat(12, 1fr) 0.75fr"
 // Each cell is square via aspect-ratio:1 and shows the return value as text.
 
-function MonthlyGrid({ data, onTooltip }: GridProps<MonthlyReturn[]>) {
+interface MonthlyGridProps extends GridProps<MonthlyReturn[]> { currentYearYtd?: number | null; }
+function MonthlyGrid({ data, onTooltip, currentYearYtd }: MonthlyGridProps) {
   const { years, byKey } = useMemo(() => {
     const byKey: Record<string, number> = {};
     for (const d of data) byKey[`${d.year}-${d.month}`] = d.value;
@@ -396,10 +398,13 @@ function MonthlyGrid({ data, onTooltip }: GridProps<MonthlyReturn[]>) {
 
       {/* Year rows */}
       {years.map(year => {
+        const isCurrentYear = year === years[years.length - 1];
         const ytdFactor = Array.from({ length: 12 }, (_, i) => byKey[`${year}-${i + 1}`] ?? null)
           .filter((v): v is number => v != null)
           .reduce((acc, v) => acc * (1 + v / 100), 1);
-        const ytd = (ytdFactor - 1) * 100;
+        // For the current year, prefer rolling_returns.return_ytd (authoritative, same source
+        // as the portfolio value card) over the compounded monthly approximation.
+        const ytd = (isCurrentYear && currentYearYtd != null) ? currentYearYtd : (ytdFactor - 1) * 100;
 
         return (
           <div
@@ -458,6 +463,7 @@ export default function ReturnsHeatmap({
   weeklyReturns,
   monthlyReturns,
   periodExtremes,
+  currentYearYtd,
 }: Props) {
   const [mode,    setMode]    = useState<Mode>("Monthly");
   const [period,  setPeriod]  = useState<Period>("1Y");
@@ -510,7 +516,7 @@ export default function ReturnsHeatmap({
         {/* Heatmap grid */}
         {mode === "Daily"   && <DailyGrid   data={filteredDaily}   onTooltip={setTooltip} />}
         {mode === "Weekly"  && <WeeklyGrid  data={filteredWeekly}  onTooltip={setTooltip} />}
-        {mode === "Monthly" && <MonthlyGrid data={filteredMonthly} onTooltip={setTooltip} />}
+        {mode === "Monthly" && <MonthlyGrid data={filteredMonthly} onTooltip={setTooltip} currentYearYtd={currentYearYtd} />}
       </div>
     </div>
   );

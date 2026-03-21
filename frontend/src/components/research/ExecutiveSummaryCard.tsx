@@ -44,18 +44,15 @@ export default function ExecutiveSummaryCard({ synthesis, coverage, onRefresh, r
   const Icon   = style.icon;
 
   return (
-    <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-4 space-y-3">
-      {/* Header row */}
+    <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-4 flex flex-col h-full gap-3">
+      {/* Header: stance badge + coverage chips */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2.5 flex-wrap">
           <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg border ${style.badge}`}>
             <Icon size={12} />
             {STANCE_LABELS[stance]}
             {stance === "insufficient_data" && (
-              <span
-                className="relative group inline-flex items-center"
-                title=""
-              >
+              <span className="relative group inline-flex items-center" title="">
                 <HelpCircle size={11} className="text-zinc-600 cursor-help" />
                 <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-xs text-zinc-300 font-normal leading-relaxed shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-50">
                   The AI model received too little structured data to form a directional view.
@@ -69,29 +66,31 @@ export default function ExecutiveSummaryCard({ synthesis, coverage, onRefresh, r
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap">
-          <CoverageChip available={coverage.quote_available}        label="Quote" />
-          <CoverageChip available={coverage.fundamentals_available} label="Fundamentals" />
-          <CoverageChip available={coverage.estimates_available}    label="Estimates" />
+          <CoverageChip available={coverage.quote_available}         label="Quote" />
+          <CoverageChip available={coverage.fundamentals_available}  label="Fundamentals" />
+          <CoverageChip available={coverage.estimates_available}     label="Estimates" />
           <CoverageChip available={coverage.fresh_context_available} label="Web context" />
         </div>
       </div>
 
-      {/* Summary bullets */}
-      {synthesis.summary_bullets.length > 0 ? (
-        <ul className="space-y-1.5">
-          {synthesis.summary_bullets.map((b, i) => (
-            <li key={i} className="flex items-start gap-2 text-sm text-zinc-300 leading-relaxed">
-              <span className="text-zinc-600 shrink-0 mt-1">·</span>
-              {b}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-sm text-zinc-500 italic">AI summary unavailable right now.</p>
-      )}
+      {/* Summary bullets — grows to fill available space */}
+      <div className="flex-1">
+        {synthesis.summary_bullets.length > 0 ? (
+          <ul className="space-y-1.5">
+            {synthesis.summary_bullets.map((b, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-zinc-300 leading-relaxed">
+                <span className="text-zinc-600 shrink-0 mt-1">·</span>
+                {b}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-zinc-500 italic">AI summary unavailable right now.</p>
+        )}
+      </div>
 
-      {/* Confidence note + refresh */}
-      <div className="flex items-center justify-between gap-2 pt-1 border-t border-zinc-800/60">
+      {/* Footer: confidence note + refresh — pinned to bottom */}
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-800/60 mt-auto">
         {synthesis.confidence_note && (
           <p className="text-[11px] text-zinc-600 leading-relaxed">{synthesis.confidence_note}</p>
         )}

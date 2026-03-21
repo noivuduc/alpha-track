@@ -122,14 +122,16 @@ export default function DashboardShell() {
     loadAnalysis(selected.id);
   }, [selected, period, loadPositions, loadAnalytics, loadAnalysis]);
 
-  // Auto-force-refresh when cached analytics is stale (>10 min old)
+  // Auto-force-refresh when cached analytics is stale (>10 min old).
+  // Only during trading hours — when market is closed prices don't change
+  // meaningfully and the re-fetch introduces gain value noise.
   useEffect(() => {
-    if (!analytics?.computed_at || !selected) return;
+    if (!analytics?.computed_at || !selected || !isTrading) return;
     const ageMs = Date.now() - new Date(analytics.computed_at).getTime();
     if (ageMs > 10 * 60 * 1000) {
       loadAnalytics(selected.id, period, true);
     }
-  }, [analytics?.computed_at, selected, period, loadAnalytics]);
+  }, [analytics?.computed_at, selected, period, loadAnalytics, isTrading]);
 
   const handleRefresh = () => {
     if (!selected) return;
