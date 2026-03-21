@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { ExternalLink, RefreshCw, ChevronDown } from "lucide-react";
+import { ExternalLink, ChevronDown } from "lucide-react";
 import { ResearchData, PriceUpdate } from "@/lib/api";
 import TickerLogo from "@/components/ui/TickerLogo";
 
@@ -14,8 +14,6 @@ interface TabItem { key: string; label: string; }
 interface Props {
   data:        ResearchData;
   livePrice?:  PriceUpdate | null;
-  onRefresh:   () => void;
-  refreshing:  boolean;
   tabs:        TabItem[];
   moreTabs:    TabItem[];
   activeTab:   string;
@@ -23,7 +21,7 @@ interface Props {
 }
 
 export default function ResearchHeader({
-  data, livePrice, onRefresh, refreshing,
+  data, livePrice,
   tabs, moreTabs, activeTab, onTabChange,
 }: Props) {
   const snap    = data.overview.snapshot;
@@ -89,30 +87,21 @@ export default function ResearchHeader({
           </div>
         </div>
 
-        {/* RIGHT: Price + refresh */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="text-right">
-            <div className="flex items-baseline gap-1.5 justify-end">
-              <span className="text-2xl font-bold font-mono text-zinc-50 tabular-nums">
-                ${fmt(price, 2)}
-              </span>
-              {isLive && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_theme(colors.emerald.400)] animate-pulse" />
-              )}
-            </div>
-            {change != null && (
-              <div className={`text-sm font-mono tabular-nums leading-tight ${positive ? "text-emerald-400" : "text-red-400"}`}>
-                {positive ? "+" : ""}{fmt(change, 2)} ({positive ? "+" : ""}{fmt(changePct, 2)}%)
-              </div>
+        {/* RIGHT: Price */}
+        <div className="shrink-0 text-right">
+          <div className="flex items-baseline gap-1.5 justify-end">
+            <span className="text-2xl font-bold font-mono text-zinc-50 tabular-nums">
+              ${fmt(price, 2)}
+            </span>
+            {isLive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_theme(colors.emerald.400)] animate-pulse" />
             )}
           </div>
-          <button
-            onClick={onRefresh}
-            className="text-zinc-500 hover:text-zinc-300 p-1.5 rounded-lg hover:bg-zinc-800 transition-colors"
-            title="Force refresh data"
-          >
-            <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-          </button>
+          {change != null && (
+            <div className={`text-sm font-mono tabular-nums leading-tight ${positive ? "text-emerald-400" : "text-red-400"}`}>
+              {positive ? "+" : ""}{fmt(change, 2)} ({positive ? "+" : ""}{fmt(changePct, 2)}%)
+            </div>
+          )}
         </div>
       </div>
 

@@ -17,6 +17,8 @@ from app.services.trend_service import build_trends
 from app.services.anomaly_service import detect_anomalies
 from app.services.insights import compute_insights
 from app.services.segment_service import validate_segments
+from app.services.analysis_layer import compute_analysis_layer
+from app.services.data_reader import DataReader as _DataReader
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +75,27 @@ def _error_key(ticker: str) -> str:
     return f"fetch_error:research:{ticker.upper()}"
 
 
+async def _get_price_bars(cache: Cache, ticker: str) -> list[dict]:
+    """
+    Fetch 1Y/1D OHLCV bars for a ticker.
+    Strategy: cache-first (DataReader), then live yfinance fallback.
+    Returns [] on any failure so analysis layer degrades gracefully.
+    """
+    try:
+        reader = _DataReader(cache)
+        bars   = await reader.get_price_history(ticker, "1y", "1d")
+        if bars and len(bars) >= 65:
+            return list(bars)
+    except Exception:
+        pass
+    # Fallback: live yfinance fetch (only if cache miss)
+    try:
+        bars = await _yf.get_price_history(ticker, "1y", "1d")
+        return [dict(b) for b in bars] if bars else []
+    except Exception:
+        return []
+
+
 async def fetch_research(ctx: dict, ticker: str) -> None:
     """ARQ on-demand task: full research assembly for a ticker."""
     cache: Cache = ctx["cache"]
@@ -125,6 +148,14 @@ async def fetch_research(ctx: dict, ticker: str) -> None:
             news_raw, segments_r,
             profile, yf_ext, peers,
         )
+
+        # Fetch price bars for the deterministic sentiment regime component.
+        # Run ticker + SPY in parallel; graceful [] fallback on any failure.
+        price_bars, spy_bars = await asyncio.gather(
+            _get_price_bars(cache, ticker),
+            _get_price_bars(cache, "SPY"),
+        )
+        response["analysis_layer"] = compute_analysis_layer(response, price_bars, spy_bars)
 
         await cache.set(_research_cache_key(ticker), json.dumps(response, default=str), _RESEARCH_CACHE_TTL)
         await cache.delete(_error_key(ticker))
@@ -213,6 +244,7 @@ def _assemble_response(
 
     response["analysis"]["insights"]  = compute_insights(sym, response)
     response["analysis"]["anomalies"] = detect_anomalies(response)
+    # analysis_layer populated by fetch_research after async price bar fetch
     return response
 
 

@@ -23,6 +23,7 @@ import EarningsReaction    from "./EarningsReaction";
 import InvestmentInsights  from "./InvestmentInsights";
 import FinancialSignals    from "./FinancialSignals";
 import AiAnalysis          from "./AiAnalysis";
+import AnalysisLayerBlock  from "./AnalysisLayer";
 import { PeerMetrics }     from "@/lib/api";
 
 const FinancialTrends         = dynamic(() => import("./FinancialTrends"),         { ssr: false });
@@ -65,7 +66,6 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
   const [loading,    setLoading]    = useState(true);
   const [preparing,  setPreparing]  = useState(false);
   const [error,      setError]      = useState("");
-  const [refreshing, setRefreshing] = useState(false);
   const [finPeriod,  setFinPeriod]  = useState<"annual" | "quarterly">("annual");
   const [navOpen,    setNavOpen]    = useState(false);
   const [livePrice,  setLivePrice]  = useState<PriceUpdate | null>(null);
@@ -236,8 +236,6 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
         <ResearchHeader
           data={data}
           livePrice={livePrice}
-          onRefresh={async () => { setRefreshing(true); await load(true); setRefreshing(false); }}
-          refreshing={refreshing}
           tabs={[...PRIMARY_TABS]}
           moreTabs={[...MORE_TABS]}
           activeTab={activeTab}
@@ -262,6 +260,15 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             {/* ── OVERVIEW ─────────────────────────────────────────── */}
             {activeTab === "overview" && (
               <>
+                {/* Analysis Layer — sits above all evidence sections */}
+                {data.analysis_layer && (
+                  <AnalysisLayerBlock
+                    ticker={sym}
+                    analysisLayer={data.analysis_layer}
+                    computedAt={data.computed_at}
+                  />
+                )}
+
                 {(profile.description || company.sector) && (
                   <SectionPanel title="Company Overview" id="sec-overview">
                     <div className="space-y-4">

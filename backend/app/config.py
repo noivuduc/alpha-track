@@ -41,6 +41,7 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY:    str = ""
     ANTHROPIC_API_KEY: str = ""
+    TAVILY_API_KEY:    str = ""
 
     # ── Cache TTLs (seconds) ──────────────────────────────────────────────
     # Real-time / high-churn
