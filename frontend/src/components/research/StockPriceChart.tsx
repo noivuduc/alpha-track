@@ -169,11 +169,24 @@ export default function StockPriceChart({ ticker }: { ticker: string }) {
       </div>
 
       {loading ? (
-        <div className="h-72 flex items-center justify-center">
+        <div className="h-72 flex flex-col items-center justify-center gap-2">
           <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="text-xs text-zinc-600">Loading price history…</div>
         </div>
       ) : error ? (
-        <div className="h-40 flex items-center justify-center text-red-400 text-sm">{error}</div>
+        <div className="h-40 flex flex-col items-center justify-center gap-3">
+          <div className="text-red-400 text-sm">{error}</div>
+          <button
+            onClick={() => fetchData(range)}
+            className="text-xs text-blue-400 hover:text-blue-300 px-3 py-1.5 rounded-lg border border-blue-800 hover:border-blue-600 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      ) : bars.length === 0 ? (
+        <div className="h-40 flex items-center justify-center text-zinc-600 text-sm">
+          No price data available
+        </div>
       ) : (
         <>
           {/* Price chart */}

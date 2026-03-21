@@ -27,6 +27,16 @@ log      = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _normalize_news_item(item: dict) -> dict:
+    """Normalize cached news: rename legacy 'headline' key → 'title'."""
+    if "headline" in item and "title" not in item:
+        item = {**item, "title": item["headline"] or "Untitled article"}
+        item.pop("headline", None)
+    if not item.get("title"):
+        item = {**item, "title": "Untitled article"}
+    return item
+
+
 # Redis cache key helpers (same scheme as DataService for compatibility)
 def _price_key(t: str)          -> str: return f"price:{t.upper()}"
 def _history_key(t, p, iv)      -> str: return f"history:{t.upper()}:{p}:{iv}"
@@ -285,7 +295,7 @@ class DataReader:
         """Read news from Redis first, fall back to Postgres ticker_news table."""
         cached = await self.cache.get(f"news:{ticker.upper()}")
         if cached:
-            return json.loads(cached)
+            return [_normalize_news_item(item) for item in json.loads(cached)]
 
         try:
             async with AsyncSessionLocal() as db:
@@ -298,11 +308,11 @@ class DataReader:
                 rows = result.scalars().all()
                 return [
                     {
-                        "ticker":   r.ticker,
-                        "headline": r.headline,
-                        "source":   r.source,
-                        "url":      r.url,
-                        "date":     r.published,
+                        "ticker": r.ticker,
+                        "title":  r.headline or "Untitled article",
+                        "source": r.source,
+                        "url":    r.url,
+                        "date":   r.published,
                     }
                     for r in rows
                 ]

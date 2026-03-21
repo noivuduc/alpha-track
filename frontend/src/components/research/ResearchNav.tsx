@@ -3,7 +3,13 @@ import { useState, useEffect } from "react";
 
 export interface NavSection { id: string; label: string; }
 
-export default function ResearchNav({ sections }: { sections: NavSection[] }) {
+interface Props {
+  sections:    NavSection[];
+  horizontal?: boolean;
+  variant?:    "pills" | "tabs";
+}
+
+export default function ResearchNav({ sections, horizontal = false, variant = "pills" }: Props) {
   const [active, setActive] = useState<string>("");
 
   useEffect(() => {
@@ -31,6 +37,46 @@ export default function ResearchNav({ sections }: { sections: NavSection[] }) {
   function scrollTo(id: string) {
     const el = document.getElementById(id);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  if (horizontal && variant === "tabs") {
+    return (
+      <nav className="flex items-center overflow-x-auto scrollbar-thin">
+        {sections.map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => scrollTo(id)}
+            className={`px-4 py-3 text-sm font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors ${
+              active === id
+                ? "border-blue-500 text-blue-400"
+                : "border-transparent text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+    );
+  }
+
+  if (horizontal) {
+    return (
+      <nav className="flex items-center gap-0.5 overflow-x-auto scrollbar-none">
+        {sections.map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => scrollTo(id)}
+            className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap shrink-0 transition-colors ${
+              active === id
+                ? "bg-blue-600/20 text-blue-400 font-medium"
+                : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+    );
   }
 
   return (

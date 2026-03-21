@@ -65,11 +65,12 @@ async def _fetch_and_store_news(cache: Cache, ticker: str) -> None:
             async with AsyncSessionLocal() as db:
                 async with db.begin():
                     for item in news:
+                        title = item.get("title") or item.get("headline") or "Untitled article"
                         stmt = (
                             pg_insert(TickerNews)
                             .values(
                                 ticker=item["ticker"],
-                                headline=item["headline"],
+                                headline=title,
                                 source=item.get("source", ""),
                                 url=item.get("url", ""),
                                 published=item.get("date", ""),
@@ -78,7 +79,7 @@ async def _fetch_and_store_news(cache: Cache, ticker: str) -> None:
                             .on_conflict_do_update(
                                 constraint="uq_ticker_news_url",
                                 set_={
-                                    "headline":   item["headline"],
+                                    "headline":   title,
                                     "source":     item.get("source", ""),
                                     "published":  item.get("date", ""),
                                     "fetched_at": datetime.now(timezone.utc),

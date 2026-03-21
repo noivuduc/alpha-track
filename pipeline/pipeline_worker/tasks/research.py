@@ -31,6 +31,16 @@ def _research_cache_key(ticker: str) -> str:
     return f"research7:{ticker.upper()}"
 
 
+def _norm_news(item: dict) -> dict:
+    """Normalize news item: rename legacy 'headline' → 'title'."""
+    if "headline" in item and "title" not in item:
+        item = {**item, "title": item["headline"] or "Untitled article"}
+        del item["headline"]
+    if not item.get("title"):
+        item = {**item, "title": "Untitled article"}
+    return item
+
+
 async def _build_snapshot_from_cache(cache: Cache, ticker: str) -> dict | None:
     """
     Try to build the price snapshot from the yfinance price cache (free)
@@ -198,7 +208,7 @@ def _assemble_response(
         "segments":         raw_segments,
         "earnings_history": yf_ext.get("earnings_history", []),
         "analysis":         {"insights": None, "anomalies": []},
-        "news": news_raw if isinstance(news_raw, list) else [],
+        "news": [_norm_news(n) for n in (news_raw if isinstance(news_raw, list) else [])],
     }
 
     response["analysis"]["insights"]  = compute_insights(sym, response)

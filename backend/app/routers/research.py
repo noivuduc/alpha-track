@@ -34,7 +34,14 @@ async def research_endpoint(
     result = await get_research(ticker.upper().strip(), force, cache, db)
 
     if isinstance(result, ResearchReady):
-        return result.data
+        data = result.data
+        # Normalize legacy "headline" key → "title" in cached news blobs
+        if data.get("news"):
+            data["news"] = [
+                {**n, "title": n.get("title") or n.get("headline") or "Untitled article"}
+                for n in data["news"]
+            ]
+        return data
 
     if isinstance(result, ResearchError):
         return JSONResponse(

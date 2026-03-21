@@ -18,7 +18,7 @@ HistoryBar:
     ts (ISO str), open, high, low, close, volume
 
 NewsItem:
-    ticker, headline, source, url, date (YYYY-MM-DD)
+    ticker, title, source, url, date (YYYY-MM-DD)
 
 For datasets that are provider-specific (FD fundamentals, ownership, etc.)
 the methods return the raw response dict — no normalization needed because
@@ -73,7 +73,7 @@ class HistoryBar(TypedDict):
 
 class NewsItem(TypedDict, total=False):
     ticker: str
-    headline: str
+    title: str
     source: str
     url: str
     date: str     # YYYY-MM-DD

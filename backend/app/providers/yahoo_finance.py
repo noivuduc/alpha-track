@@ -492,9 +492,11 @@ class YahooFinanceProvider(MarketDataProvider):
                         datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
                         if ts else ""
                     )
-                if title:
+                if not title:
+                    log.warning("yfinance news: missing title for %s item, skipping", sym)
+                else:
                     result.append(NewsItem(
-                        ticker=sym, headline=title,
+                        ticker=sym, title=title,
                         source=provider, url=url, date=pub_date,
                     ))
             return result
