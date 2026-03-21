@@ -25,9 +25,10 @@ import FinancialSignals    from "./FinancialSignals";
 import AiAnalysis          from "./AiAnalysis";
 import { PeerMetrics }     from "@/lib/api";
 
-const FinancialTrends     = dynamic(() => import("./FinancialTrends"),     { ssr: false });
-const FinancialStatements = dynamic(() => import("./FinancialStatements"), { ssr: false });
-const StockPriceChart     = dynamic(() => import("./StockPriceChart"),     { ssr: false });
+const FinancialTrends         = dynamic(() => import("./FinancialTrends"),         { ssr: false });
+const FinancialStatements     = dynamic(() => import("./FinancialStatements"),     { ssr: false });
+const StockPriceChart         = dynamic(() => import("./StockPriceChart"),         { ssr: false });
+const ResearchTradingViewChart = dynamic(() => import("./ResearchTradingViewChart"), { ssr: false });
 
 function fmtLarge(n: number | undefined | null): string {
   if (n == null) return "—";
@@ -400,19 +401,24 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
             )}
 
             {/* ── CHARTS ───────────────────────────────────────────── */}
-            {/* Keep mounted (hidden) so data survives tab switching */}
-            <div className={activeTab === "charts" ? undefined : "hidden"}>
-              <div className="space-y-5">
-                <SectionPanel title="Stock Price" id="sec-price">
-                  <StockPriceChart ticker={ticker} />
-                </SectionPanel>
+            {/* TradingView: conditionally rendered (needs visible container to size) */}
+            {activeTab === "charts" && (
+              <SectionPanel title="Interactive Chart" id="sec-tv-chart">
+                <ResearchTradingViewChart ticker={sym} exchange={company.exchange} />
+              </SectionPanel>
+            )}
 
-                {hasEarnings && (
-                  <SectionPanel title="Earnings Reaction" id="sec-earnings">
-                    <EarningsReaction earnings={earnings_history} />
-                  </SectionPanel>
-                )}
-              </div>
+            {/* StockPriceChart + EarningsReaction: always mounted (hidden) to preserve loaded data */}
+            <div className={activeTab === "charts" ? "flex flex-col gap-5" : "hidden"}>
+              <SectionPanel title="Price History" id="sec-price">
+                <StockPriceChart ticker={ticker} />
+              </SectionPanel>
+
+              {hasEarnings && (
+                <SectionPanel title="Earnings Reaction" id="sec-earnings">
+                  <EarningsReaction earnings={earnings_history} />
+                </SectionPanel>
+              )}
             </div>
 
             {/* ── AI ───────────────────────────────────────────────── */}
