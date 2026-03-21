@@ -43,7 +43,7 @@ const COLS: ColDef[] = [
   { key: "gross_margin",     label: "Gross Margin", fmt: v => fmtPct(v != null ? v * 100 : null),  colorThreshold: { good: 50, bad: 20, higherIsBetter: true  } },
   { key: "operating_margin", label: "Op Margin",    fmt: v => fmtPct(v != null ? v * 100 : null),  colorThreshold: { good: 15, bad: 0,  higherIsBetter: true  } },
   { key: "net_margin",       label: "Net Margin",   fmt: v => fmtPct(v != null ? v * 100 : null),  colorThreshold: { good: 10, bad: 0,  higherIsBetter: true  } },
-  { key: "roic",             label: "ROIC",         fmt: v => fmtPct(v != null ? v * 100 : null),  colorThreshold: { good: 15, bad: 5,  higherIsBetter: true  } },
+  { key: "roic",             label: "ROE",          fmt: v => fmtPct(v != null ? v * 100 : null),  colorThreshold: { good: 15, bad: 5,  higherIsBetter: true  } },
   { key: "pe",               label: "P/E",          fmt: v => fmtNum(v),                           colorThreshold: { good: 15, bad: 40, higherIsBetter: false } },
   { key: "ev_ebitda",        label: "EV/EBITDA",    fmt: v => fmtNum(v),                           colorThreshold: { good: 10, bad: 25, higherIsBetter: false } },
   { key: "ps",               label: "P/S",          fmt: v => fmtNum(v),                           colorThreshold: { good: 5,  bad: 15, higherIsBetter: false } },
@@ -53,7 +53,7 @@ const COLS: ColDef[] = [
 const CHART_METRICS: { key: keyof PeerMetrics; label: string; scale: number; suffix: string }[] = [
   { key: "gross_margin",     label: "Gross Margin %",   scale: 100, suffix: "%" },
   { key: "operating_margin", label: "Operating Margin %", scale: 100, suffix: "%" },
-  { key: "roic",             label: "ROIC %",           scale: 100, suffix: "%" },
+  { key: "roic",             label: "ROE %",            scale: 100, suffix: "%" },
   { key: "pe",               label: "P/E Ratio",        scale: 1,   suffix: "x" },
 ];
 
@@ -205,7 +205,7 @@ export default function PeerComparison({
         </table>
       </div>
       <div className="text-[10px] text-zinc-600">
-        Blue = {ticker} · Green = favorable · Red = unfavorable · Peers from Yahoo Finance recommendations
+        Blue = {ticker} · Green = favorable · Red = unfavorable · ROE used as profitability proxy (yfinance) · Peers from Yahoo Finance recommendations
       </div>
     </div>
   );

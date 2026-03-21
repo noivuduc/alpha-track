@@ -237,15 +237,15 @@ export default function ResearchShell({ ticker }: { ticker: string }) {
         <div ref={headerSentinelRef} className="h-0" />
 
         {/* ── Two-column layout ── */}
-        <div className="max-w-[1800px] mx-auto w-full px-4 sm:px-6 flex gap-6 items-start">
+        <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 xl:grid xl:grid-cols-[260px_1fr] xl:gap-10 items-start">
 
-          {/* Desktop left nav — sticky, dedicated 240px column */}
-          <aside className="hidden xl:flex flex-col w-60 shrink-0 sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto pt-6 pb-6">
+          {/* Desktop left nav — sticky, 260px column */}
+          <aside className="hidden xl:block sticky top-20 self-start max-h-[calc(100vh-5rem)] overflow-y-auto pt-[2.6rem] pb-6 border-r border-zinc-800/60 pr-6">
             <ResearchNav sections={navSections} />
           </aside>
 
-          {/* Main content — fills all remaining space */}
-          <main className="flex-1 min-w-0 py-6 space-y-5">
+          {/* Main content — fills remaining space, no width limiter */}
+          <main className="min-w-0 py-6 space-y-5">
 
             {/* Mobile nav toggle button */}
             <div className="xl:hidden flex justify-start">

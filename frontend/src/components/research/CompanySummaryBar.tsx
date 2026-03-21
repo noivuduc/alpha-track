@@ -47,7 +47,7 @@ export default function CompanySummaryBar({ data, livePrice, sentinelRef }: Prop
 
   return (
     <div className="fixed top-16 left-0 right-0 z-40 bg-zinc-900/97 backdrop-blur-sm border-b border-zinc-800 shadow-lg">
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-2 flex items-center gap-4 text-xs overflow-x-auto scrollbar-none">
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-2 flex items-center gap-4 text-xs overflow-x-auto scrollbar-none">
         {/* Identity */}
         <div className="flex items-center gap-2 shrink-0">
           <TickerLogo ticker={data.ticker} size={24} rounded="md" />

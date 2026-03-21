@@ -20,7 +20,7 @@ interface Props {
  */
 export default function PageHeader({ tabs, activeTab, onTabChange }: Props) {
   return (
-    <div className="border-b border-zinc-800 bg-zinc-900/40 sticky top-16 z-30">
+    <div className="border-b border-zinc-800 bg-zinc-900 sticky top-16 z-30">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 flex gap-1 overflow-x-auto scrollbar-thin">
         {tabs.map(t => (
           <button

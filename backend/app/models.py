@@ -281,6 +281,70 @@ class ApiUsage(Base):
     ts:          Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# ── Subscription tier config (DB-backed, admin-editable) ─────────────────────
+class SubscriptionTierConfig(Base):
+    """
+    Admin-editable tier limits stored in DB.
+    The in-memory TIER_LIMITS in middleware.py is the runtime enforcement copy;
+    this table is the canonical source of truth displayed/edited in the admin UI.
+    On update, flush Redis key 'tier_config' to have the API reload on next start.
+    """
+    __tablename__ = "subscription_tier_configs"
+
+    name:           Mapped[str]      = mapped_column(String(20),   primary_key=True)
+    display_name:   Mapped[str]      = mapped_column(String(100),  nullable=False)
+    max_portfolios: Mapped[int]      = mapped_column(Integer,       nullable=False)
+    max_positions:  Mapped[int]      = mapped_column(Integer,       nullable=False)
+    rpm:            Mapped[int]      = mapped_column(Integer,       nullable=False)
+    rpd:            Mapped[int]      = mapped_column(Integer,       nullable=False)
+    ai_per_day:     Mapped[int]      = mapped_column(Integer,       nullable=False, default=0)
+    price_usd:      Mapped[Decimal]  = mapped_column(Numeric(10, 2), default=0,     nullable=False)
+    updated_at:     Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ── Data provider config (DB-backed, admin-editable) ─────────────────────────
+class DataProvider(Base):
+    """
+    Registry of external data providers.  Admin can enable/disable and
+    adjust priority, rate limits, and cost-per-call estimates.
+    """
+    __tablename__ = "data_providers"
+
+    name:              Mapped[str]      = mapped_column(String(50),   primary_key=True)
+    display_name:      Mapped[str]      = mapped_column(String(100),  nullable=False)
+    enabled:           Mapped[bool]     = mapped_column(Boolean,       default=True,  nullable=False)
+    priority:          Mapped[int]      = mapped_column(Integer,       default=1,     nullable=False)
+    rate_limit_rpm:    Mapped[int]      = mapped_column(Integer,       default=60,    nullable=False)
+    cost_per_call_usd: Mapped[Decimal]  = mapped_column(Numeric(10, 6), default=0,    nullable=False)
+    notes:             Mapped[str|None] = mapped_column(Text)
+    updated_at:        Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ── Provider daily usage rollup (cost tracking) ───────────────────────────────
+class ProviderUsageDaily(Base):
+    """
+    Pre-aggregated daily call counts + estimated costs per provider.
+    Populated by the cost_tracker middleware or a nightly cron.
+    """
+    __tablename__ = "provider_usage_daily"
+    __table_args__ = (
+        UniqueConstraint("date", "provider", name="uq_provider_usage_date_provider"),
+    )
+
+    id:                 Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    date:               Mapped[date]      = mapped_column(Date,              nullable=False, index=True)
+    provider:           Mapped[str]       = mapped_column(String(50),         nullable=False)
+    calls:              Mapped[int]       = mapped_column(Integer,            default=0, nullable=False)
+    estimated_cost_usd: Mapped[Decimal]   = mapped_column(Numeric(12, 6),    default=0, nullable=False)
+    updated_at:         Mapped[datetime]  = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 # ── Audit log (TimescaleDB hypertable) ────────────────────────────────────────
 class AuditLog(Base):
     __tablename__ = "audit_log"

@@ -112,7 +112,7 @@ def hash_password(pw: str) -> str:
 
 # ─── Demo accounts ────────────────────────────────────────────────────────────
 USERS = [
-    {"email": "admin@alphadesk.com", "password": "Admin123!",  "full_name": "AlphaDesk Admin", "tier": "fund",  "is_verified": True},
+    {"email": "admin@alphadesk.com", "password": "Admin123!",  "full_name": "AlphaDesk Admin", "tier": "fund",  "is_verified": True, "is_admin": True},
     {"email": "free@demo.com",       "password": "Demo1234",   "full_name": "Alex Freeman",     "tier": "free",  "is_verified": True},
     {"email": "pro@demo.com",        "password": "Demo1234",   "full_name": "Jordan Pro",       "tier": "pro",   "is_verified": True},
     {"email": "fund@demo.com",       "password": "Demo1234",   "full_name": "Morgan Fund",      "tier": "fund",  "is_verified": True},
@@ -182,11 +182,11 @@ async def seed():
                 await conn.execute(
                     """
                     INSERT INTO users
-                      (id, email, hashed_password, full_name, tier, is_active, is_verified)
-                    VALUES ($1, $2, $3, $4, $5::subscription_tier, TRUE, $6)
+                      (id, email, hashed_password, full_name, tier, is_active, is_verified, is_admin)
+                    VALUES ($1, $2, $3, $4, $5::subscription_tier, TRUE, $6, $7)
                     """,
                     user_id, email, hash_password(u["password"]),
-                    u["full_name"], tier, u["is_verified"],
+                    u["full_name"], tier, u["is_verified"], u.get("is_admin", False),
                 )
                 print(f"✓ Created [{tier:4}]  {email}  ({u['full_name']})")
                 portfolio_id = None

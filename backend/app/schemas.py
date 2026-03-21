@@ -41,6 +41,7 @@ class UserResponse(BaseModel):
     email:      str
     full_name:  str | None
     tier:       str
+    is_admin:   bool = False
     is_verified:bool
     created_at: datetime
     model_config = {"from_attributes": True}
@@ -501,3 +502,146 @@ class AdminStats(BaseModel):
     cache_hit_rate: float
     paid_calls_today: int
     estimated_cost_usd: float
+
+# ── Admin: User management ────────────────────────────────────────────────────
+class AdminUserRow(BaseModel):
+    id:              UUID
+    email:           str
+    full_name:       str | None
+    tier:            str
+    is_active:       bool
+    is_admin:        bool
+    is_verified:     bool
+    created_at:      datetime
+    portfolio_count: int = 0
+    last_active_at:  datetime | None = None
+    model_config = {"from_attributes": True}
+
+class AdminUserDetail(AdminUserRow):
+    stripe_customer_id: str | None = None
+    has_api_key:        bool = False
+
+class AdminUserUpdate(BaseModel):
+    tier:      str | None  = Field(default=None, pattern=r"^(free|pro|fund)$")
+    is_active: bool | None = None
+    is_admin:  bool | None = None
+    full_name: str | None  = Field(default=None, max_length=255)
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if not re.search(r"[A-Z]", v): raise ValueError("Need at least 1 uppercase")
+        if not re.search(r"[0-9]", v): raise ValueError("Need at least 1 digit")
+        return v
+
+class AdminUserListResponse(BaseModel):
+    items:  list[AdminUserRow]
+    total:  int
+    limit:  int
+    offset: int
+
+# ── Admin: Tier config ────────────────────────────────────────────────────────
+class TierConfigResponse(BaseModel):
+    name:           str
+    display_name:   str
+    max_portfolios: int
+    max_positions:  int
+    rpm:            int
+    rpd:            int
+    ai_per_day:     int
+    price_usd:      Decimal
+    model_config = {"from_attributes": True}
+
+class TierConfigUpdate(BaseModel):
+    display_name:   str | None     = None
+    max_portfolios: int | None     = Field(default=None, ge=1)
+    max_positions:  int | None     = Field(default=None, ge=1)
+    rpm:            int | None     = Field(default=None, ge=1)
+    rpd:            int | None     = Field(default=None, ge=1)
+    ai_per_day:     int | None     = Field(default=None, ge=0)
+    price_usd:      Decimal | None = Field(default=None, ge=0)
+
+# ── Admin: Provider management ────────────────────────────────────────────────
+class DataProviderResponse(BaseModel):
+    name:              str
+    display_name:      str
+    enabled:           bool
+    priority:          int
+    rate_limit_rpm:    int
+    cost_per_call_usd: Decimal
+    notes:             str | None
+    model_config = {"from_attributes": True}
+
+class DataProviderUpdate(BaseModel):
+    enabled:           bool | None    = None
+    priority:          int | None     = Field(default=None, ge=1)
+    rate_limit_rpm:    int | None     = Field(default=None, ge=1)
+    cost_per_call_usd: Decimal | None = Field(default=None, ge=0)
+    notes:             str | None     = None
+
+class ReorderProvidersRequest(BaseModel):
+    order: list[str]   # provider names in desired priority order
+
+# ── Admin: Portfolio oversight ────────────────────────────────────────────────
+class AdminPortfolioRow(BaseModel):
+    id:              UUID
+    user_id:         UUID
+    user_email:      str
+    name:            str
+    currency:        str
+    position_count:  int
+    created_at:      datetime
+    updated_at:      datetime
+
+class AdminPortfolioListResponse(BaseModel):
+    items:  list[AdminPortfolioRow]
+    total:  int
+    limit:  int
+    offset: int
+
+# ── Admin: Cost tracking ──────────────────────────────────────────────────────
+class ProviderCostDay(BaseModel):
+    date:               str   # ISO date string
+    provider:           str
+    calls:              int
+    estimated_cost_usd: float
+
+class CostSummaryResponse(BaseModel):
+    period_days:          int
+    total_calls:          int
+    total_cost_usd:       float
+    by_provider:          dict[str, Any]
+    daily:                list[ProviderCostDay]
+
+# ── Admin: System summary ─────────────────────────────────────────────────────
+class SystemSummaryResponse(BaseModel):
+    total_users:          int
+    active_users_7d:      int
+    active_users_30d:     int
+    requests_today:       int
+    requests_7d:          int
+    error_rate_pct:       float
+    cache_hit_rate_pct:   float
+    paid_calls_today:     int
+    estimated_cost_today: float
+    avg_latency_ms:       float
+
+# ── Admin: Audit log ──────────────────────────────────────────────────────────
+class AuditLogRow(BaseModel):
+    id:           UUID
+    admin_email:  str | None
+    action:       str
+    entity:       str | None
+    entity_id:    UUID | None
+    metadata:     dict | None
+    ip_address:   str | None
+    ts:           datetime
+
+class AuditLogListResponse(BaseModel):
+    items:  list[AuditLogRow]
+    total:  int
+    limit:  int
+    offset: int

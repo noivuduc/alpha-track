@@ -33,9 +33,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [handleSessionExpired]);
 
   useEffect(() => {
-    auth.me()
-      .then(setUser)
-      .catch(() => { setUser(null); })
+    auth.initSession()
+      .then(u => setUser(u))
       .finally(() => setLoading(false));
   }, []);
 

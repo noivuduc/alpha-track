@@ -32,7 +32,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         value=token,
         httponly=True,
         secure=settings.ENVIRONMENT == "production",
-        samesite="strict",
+        samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         path=_COOKIE_PATH,
     )

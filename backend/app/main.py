@@ -25,6 +25,7 @@ from app.database import engine, init_redis, close_redis, Base, get_cache
 from app.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.routers import auth, portfolio, market, admin, research, search, stream
 from app.pipeline.registry import seed_tracked_tickers_from_db
+from app.admin_seed import seed_admin_defaults
 
 settings = get_settings()
 
@@ -73,6 +74,9 @@ async def lifespan(app: FastAPI):
 
     # Seed tracked tickers so pipeline worker has a universe to process
     await seed_tracked_tickers_from_db()
+
+    # Seed default tier configs + provider registry (idempotent)
+    await seed_admin_defaults()
 
     log.info("app_ready", extra={"note": "read-only mode — workers run in separate ARQ process"})
 
