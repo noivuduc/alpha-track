@@ -23,12 +23,13 @@ from app.schemas import (
     TransactionCreate, TransactionUpdate, TransactionResponse,
     WatchlistCreate, WatchlistResponse,
     PortfolioMetrics, PortfolioAnalytics,
-    SimulateRequest, SimulateResponse,
+    ScenarioRequest, ScenarioResponse,
+    ApplyScenarioRequest, ApplyScenarioResult,
     PortfolioAnalysisResponse,
 )
 from app.services.data_reader import DataReader
 from app.services import analytics as A
-from app.services.simulation_service import simulate_add_position
+from app.services.simulation_service import simulate_scenario, store_scenario, apply_scenario
 from app.services.portfolio_analysis_service import run_portfolio_analysis
 from app.pipeline.enqueue import enqueue_seed_ticker, enqueue_seed_history
 
@@ -350,13 +351,14 @@ async def get_portfolio_analysis(
 
 
 # ── Portfolio Simulation ──────────────────────────────────────────────────────
-@router.post("/{portfolio_id}/simulate", response_model=SimulateResponse)
+@router.post("/{portfolio_id}/simulate", response_model=ScenarioResponse)
 async def simulate_portfolio(
     portfolio_id: UUID,
-    body:      SimulateRequest,
+    body:      ScenarioRequest,
     benchmark: str          = Query("SPY", description="Benchmark for beta/alpha"),
     user: User              = Depends(check_rate_limit),
     db: AsyncSession        = Depends(get_db),
+    cache: Cache            = Depends(get_cache),
     reader: DataReader      = Depends(_get_reader),
 ):
     p = await db.get(Portfolio, portfolio_id)
@@ -377,16 +379,58 @@ async def simulate_portfolio(
         )
 
     try:
-        result = await simulate_add_position(
-            positions      = positions,
-            new_ticker     = body.ticker,
-            new_weight_pct = body.weight_pct,
-            reader         = reader,
-            benchmark      = benchmark,
+        result = await simulate_scenario(
+            positions    = positions,
+            transactions = [t.model_dump() for t in body.transactions],
+            reader       = reader,
+            benchmark    = benchmark,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
+    # Persist scenario in Redis so the user can apply it within 15 min
+    portfolio_snapshot = {pos.ticker: float(pos.shares) for pos in positions}
+    scenario_id = await store_scenario(
+        cache              = cache,
+        portfolio_id       = str(portfolio_id),
+        user_id            = str(user.id),
+        transactions       = [t.model_dump() for t in body.transactions],
+        portfolio_snapshot = portfolio_snapshot,
+    )
+    result["scenario_id"] = scenario_id
+    return result
+
+
+# ── Apply simulated scenario to real portfolio ─────────────────────────────────
+@router.post("/{portfolio_id}/simulate/apply", response_model=ApplyScenarioResult)
+async def apply_simulated_scenario(
+    portfolio_id: UUID,
+    body:      ApplyScenarioRequest,
+    user: User              = Depends(check_rate_limit),
+    db: AsyncSession        = Depends(get_db),
+    cache: Cache            = Depends(get_cache),
+    reader: DataReader      = Depends(_get_reader),
+):
+    p = await db.get(Portfolio, portfolio_id)
+    if not p or p.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
+
+    try:
+        result = await apply_scenario(
+            scenario_id  = body.scenario_id,
+            portfolio_id = str(portfolio_id),
+            user_id      = str(user.id),
+            db           = db,
+            cache        = cache,
+            reader       = reader,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Invalidate all cached analytics for this portfolio
+    await _invalidate_portfolio_cache(cache, portfolio_id)
     return result
 
 

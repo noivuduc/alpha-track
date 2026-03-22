@@ -10,7 +10,9 @@ import {
   HealthBreakdown,
   RebalancingSuggestion,
   CorrelationCluster,
+  SimulatorPrefillRow,
 } from "@/lib/api";
+import { suggestionToPrefill } from "@/lib/suggestionPrefill";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -266,7 +268,7 @@ export const SuggestionCard = memo(function SuggestionCard({
   s, onSimulate,
 }: {
   s: RebalancingSuggestion;
-  onSimulate?: (ticker: string) => void;
+  onSimulate?: (prefill: SimulatorPrefillRow[]) => void;
 }) {
   const { badge, icon } = actionStyle(s.action);
   const dot  = priorityDot(s.priority);
@@ -309,7 +311,7 @@ export const SuggestionCard = memo(function SuggestionCard({
       {/* CTA — for ticker-level suggestions */}
       {s.ticker && onSimulate && (
         <button
-          onClick={() => onSimulate(s.ticker!)}
+          onClick={() => onSimulate(suggestionToPrefill(s))}
           className="w-full text-xs font-medium text-blue-300 hover:text-white bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 hover:border-blue-400/60 rounded-lg py-2 transition-all"
         >
           Apply &amp; Simulate →
@@ -452,7 +454,7 @@ function SectionHeader({ title, count }: { title: string; count?: number }) {
 
 interface Props {
   portfolioId: string;
-  onOpenSimulator?: (ticker: string) => void;
+  onOpenSimulator?: (prefill: SimulatorPrefillRow[]) => void;
 }
 
 export default function AnalysisTab({ portfolioId, onOpenSimulator }: Props) {

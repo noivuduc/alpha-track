@@ -8,7 +8,7 @@ import {
 } from "recharts";
 import {
   Position, PortfolioAnalytics, ContributionEntry, PositionAnalyticsEntry,
-  PortfolioNewsItem, PortfolioAnalysisResponse, PriceUpdate,
+  PortfolioNewsItem, PortfolioAnalysisResponse, PriceUpdate, SimulatorPrefillRow,
 } from "@/lib/api";
 import { PortfolioHealthCard, SuggestionCard } from "./AnalysisTab";
 import { fmt, fmtCurrency, fmtLarge, gainClass } from "@/lib/portfolio-math";
@@ -26,7 +26,7 @@ interface Props {
   isStreaming?:     boolean;
   nextRefreshIn?:   number | null;
   lastFetchedAt?:   Date | null;
-  onOpenSimulator?: (ticker: string) => void;
+  onOpenSimulator?: (prefill: SimulatorPrefillRow[]) => void;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

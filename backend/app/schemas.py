@@ -445,9 +445,11 @@ class PortfolioAnalysisResponse(BaseModel):
 
 # ── Portfolio Simulation ──────────────────────────────────────────────────────
 
-class SimulateRequest(BaseModel):
-    ticker:     str   = Field(min_length=1, max_length=20)
-    weight_pct: float = Field(gt=0, lt=100, description="Target weight 0–100 (exclusive)")
+class ScenarioTransactionInput(BaseModel):
+    action: str   = Field(pattern=r"^(buy|sell)$",                    description="buy or sell")
+    ticker: str   = Field(min_length=1, max_length=20)
+    mode:   str   = Field(pattern=r"^(shares|amount|weight_pct|target_weight)$", description="How value is specified")
+    value:  float = Field(gt=0,                                        description="Shares, $ amount, or weight %")
 
     @field_validator("ticker")
     @classmethod
@@ -456,6 +458,10 @@ class SimulateRequest(BaseModel):
         if not re.match(r"^[A-Z0-9.\-]{1,10}$", v):
             raise ValueError("Ticker must be 1–10 chars: A-Z, 0-9, dot, or hyphen")
         return v
+
+
+class ScenarioRequest(BaseModel):
+    transactions: list[ScenarioTransactionInput] = Field(min_length=1, max_length=20)
 
 
 class SimulateSnapshot(BaseModel):
@@ -484,11 +490,60 @@ class SimulateDelta(BaseModel):
     win_rate_excess_pct:   float = 0.0
 
 
+class HoldingSnapshot(BaseModel):
+    ticker:       str
+    shares:       float
+    weight_pct:   float
+    market_value: float
+    change:       str | None = None   # "new" | "increased" | "reduced" | "exited"
+
+
+class ScenarioSummary(BaseModel):
+    # User-entered transaction counts (rows in the scenario builder)
+    transaction_count: int
+    buy_count:         int
+    sell_count:        int
+    # Affected holdings (can differ from transaction count)
+    tickers_added:   list[str]   # new positions that didn't exist before
+    tickers_removed: list[str]   # positions fully exited
+    tickers_changed: list[str]   # positions whose weight changed (may be > transaction_count)
+    net_cash_delta:  float       # positive = cash needed, negative = cash freed
+
+
+class ScenarioResponse(BaseModel):
+    before:           SimulateSnapshot
+    after:            SimulateSnapshot
+    delta:            SimulateDelta
+    exposure:         dict[str, Any]   # {sector_before, sector_after}
+    insights:         list[str]
+    holdings_before:  list[HoldingSnapshot]
+    holdings_after:   list[HoldingSnapshot]
+    scenario_summary: ScenarioSummary
+    scenario_id:      str              # Redis key; used by apply endpoint
+
+
+class ApplyScenarioRequest(BaseModel):
+    scenario_id: str = Field(min_length=1)
+
+
+class ApplyScenarioResult(BaseModel):
+    applied_transactions: int
+    positions_created:    int
+    positions_updated:    int
+    positions_closed:     int
+    message:              str
+
+
+# Legacy single-stock simulation (kept for backward compat)
+class SimulateRequest(BaseModel):
+    ticker:     str   = Field(min_length=1, max_length=20)
+    weight_pct: float = Field(gt=0, lt=100)
+
 class SimulateResponse(BaseModel):
     before:                      SimulateSnapshot
     after:                       SimulateSnapshot
     delta:                       SimulateDelta
-    exposure:                    dict[str, Any]   # {sector_before, sector_after}
+    exposure:                    dict[str, Any]
     insights:                    list[str]
     new_ticker_weight_pct:       float
     correlation_with_portfolio:  float | None = None

@@ -5,6 +5,7 @@ import { LayoutDashboard, BarChart2, ShieldAlert, FlaskConical } from "lucide-re
 import {
   portfolios as portApi, positions as posApi,
   Portfolio, Position, PortfolioAnalytics, PortfolioAnalysisResponse, PriceUpdate,
+  SimulatorPrefillRow,
 } from "@/lib/api";
 import { useMarketStatus } from "@/hooks/useMarketStatus";
 import { usePriceStream } from "@/hooks/usePriceStream";
@@ -29,7 +30,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 
 export default function DashboardShell() {
   const [tab,        setTab]        = useState<Tab>("overview");
-  const [simPrefill, setSimPrefill] = useState<string | undefined>(undefined);
+  const [simPrefill, setSimPrefill] = useState<SimulatorPrefillRow[] | undefined>(undefined);
   const period: Period = "1y";
 
   const [portfolios,       setPortfolios]       = useState<Portfolio[]>([]);
@@ -193,7 +194,7 @@ export default function DashboardShell() {
                 isStreaming={isTrading}
                 nextRefreshIn={isTrading ? null : nextRefreshIn}
                 lastFetchedAt={isTrading ? null : lastFetchedAt}
-                onOpenSimulator={ticker => { setSimPrefill(ticker); setTab("simulator"); }}
+                onOpenSimulator={prefill => { setSimPrefill(prefill); setTab("simulator"); }}
               />
             )}
             {tab === "holdings"  && (
@@ -217,7 +218,15 @@ export default function DashboardShell() {
               />
             )}
             {tab === "simulator" && (
-              <SimulatorTab portfolioId={selected.id} prefillTicker={simPrefill} />
+              <SimulatorTab
+                portfolioId={selected.id}
+                portfolioName={selected.name}
+                prefill={simPrefill}
+                onApplied={() => {
+                  loadPositions(selected.id);
+                  loadAnalytics(selected.id, period, true);
+                }}
+              />
             )}
           </>
         )}
