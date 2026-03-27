@@ -75,47 +75,47 @@ class Cache:
         self.r = redis
 
     async def get(self, key: str) -> str | None:
-        return await self.r.get(f"alphadesk:{key}")
+        return await self.r.get(f"alphatrack:{key}")
 
     async def mget(self, keys: list[str]) -> list[str | None]:
         """Fetch multiple keys in a single Redis round-trip."""
         if not keys:
             return []
-        prefixed = [f"alphadesk:{k}" for k in keys]
+        prefixed = [f"alphatrack:{k}" for k in keys]
         return await self.r.mget(*prefixed)
 
     async def set(self, key: str, value: str, ttl: int):
-        await self.r.setex(f"alphadesk:{key}", ttl, value)
+        await self.r.setex(f"alphatrack:{key}", ttl, value)
 
     async def delete(self, key: str):
-        await self.r.delete(f"alphadesk:{key}")
+        await self.r.delete(f"alphatrack:{key}")
 
     async def incr(self, key: str) -> int:
         """Monotonic counter (used to coalesce debounced background work)."""
-        return int(await self.r.incr(f"alphadesk:{key}"))
+        return int(await self.r.incr(f"alphatrack:{key}"))
 
     async def exists(self, key: str) -> bool:
-        return bool(await self.r.exists(f"alphadesk:{key}"))
+        return bool(await self.r.exists(f"alphatrack:{key}"))
 
     # Rate limiting with sliding window
     async def incr_with_ttl(self, key: str, ttl: int) -> int:
         pipe = self.r.pipeline()
-        full_key = f"alphadesk:{key}"
+        full_key = f"alphatrack:{key}"
         await pipe.incr(full_key)
         await pipe.expire(full_key, ttl)
         results = await pipe.execute()
         return results[0]
 
     async def get_count(self, key: str) -> int:
-        val = await self.r.get(f"alphadesk:{key}")
+        val = await self.r.get(f"alphatrack:{key}")
         return int(val) if val else 0
 
     async def acquire_lock(self, key: str, ttl: int = 120) -> bool:
         """Atomic SET NX — returns True only if this caller acquired the lock."""
-        return bool(await self.r.set(f"alphadesk:{key}", "1", nx=True, ex=ttl))
+        return bool(await self.r.set(f"alphatrack:{key}", "1", nx=True, ex=ttl))
 
     async def release_lock(self, key: str):
-        await self.r.delete(f"alphadesk:{key}")
+        await self.r.delete(f"alphatrack:{key}")
 
 def get_cache() -> Cache:
     return Cache(get_redis())

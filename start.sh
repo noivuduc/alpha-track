@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AlphaDesk — local dev launcher
+# AlphaTrack — local dev launcher
 # Usage: ./start.sh [--no-frontend]
 set -e
 
@@ -7,9 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info()  { echo -e "${GREEN}[alphadesk]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[alphadesk]${NC} $*"; }
-error() { echo -e "${RED}[alphadesk]${NC} $*"; exit 1; }
+info()  { echo -e "${GREEN}[alphatrack]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[alphatrack]${NC} $*"; }
+error() { echo -e "${RED}[alphatrack]${NC} $*"; exit 1; }
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 command -v docker  >/dev/null 2>&1 || error "Docker not found. Install from https://www.docker.com/products/docker-desktop"
@@ -21,7 +21,7 @@ docker compose up -d postgres redis
 
 info "Waiting for Postgres to be healthy..."
 for i in $(seq 1 30); do
-  if docker compose exec -T postgres pg_isready -U alphadesk >/dev/null 2>&1; then
+  if docker compose exec -T postgres pg_isready -U alphatrack >/dev/null 2>&1; then
     info "Postgres is ready ✓"
     break
   fi
@@ -49,13 +49,8 @@ pip install -q -r requirements.txt
 pip install -q -r "$SCRIPT_DIR/pipeline/requirements.txt"
 info "Python deps installed ✓"
 
-# info "Running database migrations..."
-# DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
-#   alembic upgrade head
-# info "Migrations applied ✓"
-
 info "Starting FastAPI backend on http://localhost:8000 ..."
-DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
+DATABASE_URL="postgresql+asyncpg://alphatrack:changeme@localhost:5432/alphatrack" \
 REDIS_URL="redis://:changeme@localhost:6379/0" \
   # Limit --reload to app/ only (avoids watching .venv, __pycache__, etc. → fewer FDs / watches)
   uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app &
@@ -66,7 +61,7 @@ cd "$SCRIPT_DIR"
 # ── Pipeline Worker (ARQ) — standalone service ────────────────────────────────
 info "Starting ARQ pipeline worker..."
 PYTHONPATH="$SCRIPT_DIR/backend:$SCRIPT_DIR/pipeline" \
-DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
+DATABASE_URL="postgresql+asyncpg://alphatrack:changeme@localhost:5432/alphatrack" \
 REDIS_URL="redis://:changeme@localhost:6379/0" \
   arq pipeline_worker.worker.WorkerSettings &
 WORKER_PID=$!
@@ -75,7 +70,7 @@ info "Pipeline worker started (PID $WORKER_PID) ✓"
 # ── Pipeline Dashboard ────────────────────────────────────────────────────────
 info "Starting pipeline dashboard on http://localhost:9000 ..."
 PYTHONPATH="$SCRIPT_DIR/backend:$SCRIPT_DIR/pipeline" \
-DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
+DATABASE_URL="postgresql+asyncpg://alphatrack:changeme@localhost:5432/alphatrack" \
 REDIS_URL="redis://:changeme@localhost:6379/0" \
   uvicorn pipeline_worker.dashboard.app:app --host 0.0.0.0 --port 9000 &
 DASHBOARD_PID=$!
@@ -95,7 +90,7 @@ fi
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 info "╔═══════════════════════════════════════════╗"
-info "║          AlphaDesk is running!           ║"
+info "║         AlphaTrack is running!           ║"
 info "╠═══════════════════════════════════════════╣"
 info "║  Frontend   →  http://localhost:3000     ║"
 info "║  API docs   →  http://localhost:8000/docs║"

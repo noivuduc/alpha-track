@@ -148,7 +148,7 @@ PILLAR ASSESSMENTS (computed deterministically — do not override):
 FINANCIAL ANOMALIES (computed):
 {anom_lines}
 
-RECENT NEWS (AlphaDesk data):
+RECENT NEWS (AlphaTrack data):
 {news_lines}
 
 {tavily_block}RULES — violations make the output unusable:

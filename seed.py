@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-AlphaDesk — Database Seed Script
+AlphaTrack — Database Seed Script
 Creates demo accounts (free/pro/fund/admin) with realistic portfolio data.
 
 Usage:
-    cd /Users/noivuduc/Documents/github/alphatrack
+    cd /path/to/alphatrack
     backend/.venv/bin/python seed.py
 """
 import asyncio
@@ -17,7 +17,7 @@ import bcrypt
 
 random.seed(42)
 
-DB_URL = "postgresql://alphadesk:changeme@localhost:5432/alphadesk"
+DB_URL = "postgresql://alphatrack:changeme@localhost:5432/alphatrack"
 
 # ─── Historical monthly closing prices ───────────────────────────────────────
 # Realistic approximate monthly close prices (YYYY-MM → price).
@@ -112,7 +112,7 @@ def hash_password(pw: str) -> str:
 
 # ─── Demo accounts ────────────────────────────────────────────────────────────
 USERS = [
-    {"email": "admin@alphadesk.com", "password": "Admin123!",  "full_name": "AlphaDesk Admin", "tier": "fund",  "is_verified": True, "is_admin": True},
+    {"email": "admin@alphatrack.com", "password": "Admin123!",  "full_name": "AlphaTrack Admin", "tier": "fund",  "is_verified": True, "is_admin": True},
     {"email": "free@demo.com",       "password": "Demo1234",   "full_name": "Alex Freeman",     "tier": "free",  "is_verified": True},
     {"email": "pro@demo.com",        "password": "Demo1234",   "full_name": "Jordan Pro",       "tier": "pro",   "is_verified": True},
     {"email": "fund@demo.com",       "password": "Demo1234",   "full_name": "Morgan Fund",      "tier": "fund",  "is_verified": True},
@@ -149,7 +149,7 @@ def pick_buy_date(months_range: tuple) -> datetime:
 
 async def seed():
     print(f"\n{'='*58}")
-    print("  AlphaDesk — Database Seed")
+    print("  AlphaTrack — Database Seed")
     print(f"{'='*58}\n")
 
     conn = await asyncpg.connect(DB_URL)
@@ -159,17 +159,17 @@ async def seed():
             email = u["email"]
             tier  = u["tier"]
 
-            existing = await conn.fetchrow("SELECT id FROM users WHERE email=$1", email)
+            existing = await conn.fetchrow("SELECT id FROM alphatrack_users WHERE email=$1", email)
 
             if existing:
                 user_id = str(existing["id"])
                 print(f"→ {email} exists — checking portfolio…")
                 port = await conn.fetchrow(
-                    "SELECT id FROM portfolios WHERE user_id=$1", user_id
+                    "SELECT id FROM alphatrack_portfolios WHERE user_id=$1", user_id
                 )
                 if port:
                     cnt = await conn.fetchval(
-                        "SELECT COUNT(*) FROM positions WHERE portfolio_id=$1", port["id"]
+                        "SELECT COUNT(*) FROM alphatrack_positions WHERE portfolio_id=$1", port["id"]
                     )
                     if cnt > 0:
                         print(f"  Already has {cnt} positions, skipping.\n")
@@ -181,9 +181,9 @@ async def seed():
                 user_id = str(uuid4())
                 await conn.execute(
                     """
-                    INSERT INTO users
+                    INSERT INTO alphatrack_users
                       (id, email, hashed_password, full_name, tier, is_active, is_verified, is_admin)
-                    VALUES ($1, $2, $3, $4, $5::subscription_tier, TRUE, $6, $7)
+                    VALUES ($1, $2, $3, $4, $5::subscriptiontier, TRUE, $6, $7)
                     """,
                     user_id, email, hash_password(u["password"]),
                     u["full_name"], tier, u["is_verified"], u.get("is_admin", False),

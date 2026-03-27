@@ -1,4 +1,4 @@
-# AlphaDesk — Full-Stack Architecture
+# AlphaTrack — Full-Stack Architecture
 
 ## Database Selection Rationale
 
@@ -92,7 +92,7 @@ Request for market data
 ## Project Structure
 
 ```
-alphadesk/
+alphatrack/
 ├── docker-compose.yml          # PostgreSQL + TimescaleDB + Redis + API + Frontend
 ├── backend/
 │   ├── main.py                 # FastAPI app, middleware, lifespan

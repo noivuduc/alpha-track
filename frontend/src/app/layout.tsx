@@ -3,8 +3,8 @@ import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 
 export const metadata: Metadata = {
-  title: "AlphaDesk",
-  description: "Enterprise portfolio management",
+  title: "AlphaTrack",
+  description: "Open-source portfolio analytics platform",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

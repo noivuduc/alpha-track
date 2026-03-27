@@ -114,7 +114,7 @@ export default function ResearchTradingViewChart({ ticker, exchange }: Props) {
         >
           TradingView
         </a>
-        {" "}· Prices shown elsewhere in AlphaDesk use a different data source.
+        {" "}· Prices shown elsewhere in AlphaTrack use a different data source.
       </p>
     </div>
   );

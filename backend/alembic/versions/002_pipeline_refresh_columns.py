@@ -5,10 +5,10 @@ Revises: 001_prod_hardening
 Create Date: 2026-03-19
 
 Changes:
-  1. tracked_tickers.last_price_refresh   — nullable TIMESTAMPTZ
-  2. tracked_tickers.last_history_refresh  — nullable TIMESTAMPTZ
-  3. tracked_tickers.last_news_refresh     — nullable TIMESTAMPTZ
-  4. ticker_news table                     — new table for pipeline-populated news
+  1. alphatrack_tracked_tickers.last_price_refresh   — nullable TIMESTAMPTZ
+  2. alphatrack_tracked_tickers.last_history_refresh  — nullable TIMESTAMPTZ
+  3. alphatrack_tracked_tickers.last_news_refresh     — nullable TIMESTAMPTZ
+  4. alphatrack_ticker_news table                     — new table for pipeline-populated news
 """
 from alembic import op
 import sqlalchemy as sa
@@ -46,15 +46,15 @@ def _table_exists(table: str) -> bool:
 
 def upgrade() -> None:
     for col in ("last_price_refresh", "last_history_refresh", "last_news_refresh"):
-        if not _column_exists("tracked_tickers", col):
+        if not _column_exists("alphatrack_tracked_tickers", col):
             op.add_column(
-                "tracked_tickers",
+                "alphatrack_tracked_tickers",
                 sa.Column(col, sa.DateTime(timezone=True), nullable=True),
             )
 
-    if not _table_exists("ticker_news"):
+    if not _table_exists("alphatrack_ticker_news"):
         op.create_table(
-            "ticker_news",
+            "alphatrack_ticker_news",
             sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
             sa.Column("ticker", sa.String(20), nullable=False, index=True),
             sa.Column("headline", sa.Text(), nullable=False),
@@ -67,6 +67,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("ticker_news")
+    op.drop_table("alphatrack_ticker_news")
     for col in ("last_news_refresh", "last_history_refresh", "last_price_refresh"):
-        op.drop_column("tracked_tickers", col)
+        op.drop_column("alphatrack_tracked_tickers", col)
