@@ -42,7 +42,7 @@ export default function AdminCostsPage() {
     setLoading(true); setError(null);
     adminApi.costs(d)
       .then(setSummary)
-      .catch(e => setError(e.message))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }
 
@@ -127,7 +127,7 @@ export default function AdminCostsPage() {
                 tickFormatter={d => String(d).slice(5)} />
               <YAxis tick={{ fill: "#71717a", fontSize: 10 }} axisLine={false} tickLine={false}
                 tickFormatter={v => `$${Number(v).toFixed(3)}`} />
-              <Tooltip contentStyle={TT_STYLE} formatter={(v: number) => [`$${v.toFixed(4)}`, ""]} />
+              <Tooltip contentStyle={TT_STYLE} formatter={(v) => [`$${Number(v).toFixed(4)}`, ""]} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               {providers.filter(p => p === "financialdatasets").map(p => (
                 <Bar key={p} dataKey={p} fill={provColor(p)} radius={[4, 4, 0, 0]} />

@@ -6,6 +6,7 @@ uvicorn[standard]==0.30.0
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 alembic==1.13.3
+greenlet>=3.0.0
 
 # Redis
 redis[hiredis]==5.2.0
@@ -45,3 +46,6 @@ arq>=0.26.1
 
 # Monitoring
 python-json-logger==2.0.7
+
+# Testing
+pytest>=8.0.0

@@ -1,5 +1,5 @@
 """
-AlphaDesk API — FastAPI entrypoint.
+AlphaTrack API — FastAPI entrypoint.
 
 Architecture:
   PostgreSQL (+ TimescaleDB) → persistent data, L2 cache
@@ -7,10 +7,12 @@ Architecture:
   yfinance                   → free price data, profiles, history
   financialdatasets.ai       → paid fundamentals, SEC filings, insider trades
 """
+import asyncio
 import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +20,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pythonjsonlogger import jsonlogger
 from slowapi.errors import RateLimitExceeded
+
+from alembic.config import Config as AlembicConfig
+from alembic import command as alembic_command
 
 from app.config import get_settings
 from app.cost_tracker import init_request_cost
@@ -28,6 +33,16 @@ from app.pipeline.registry import seed_tracked_tickers_from_db
 from app.admin_seed import seed_admin_defaults
 
 settings = get_settings()
+
+_ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+
+
+def _run_alembic_upgrade() -> None:
+    """Run pending Alembic migrations synchronously (called via asyncio.to_thread)."""
+    cfg = AlembicConfig(str(_ALEMBIC_INI))
+    cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    alembic_command.upgrade(cfg, "head")
+
 
 # ── Structured JSON logging ───────────────────────────────────────────────────
 def _setup_logging() -> None:
@@ -64,13 +79,11 @@ async def lifespan(app: FastAPI):
     log.info("starting", extra={"app": settings.APP_NAME, "version": settings.APP_VERSION, "env": settings.ENVIRONMENT})
     await init_redis()
 
-    # Dev: auto-create tables. Production: run 'alembic upgrade head' in CI/CD.
-    if settings.ENVIRONMENT != "production":
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        log.info("db_tables_ready", extra={"mode": "create_all (dev only)"})
-    else:
-        log.info("db_tables_skipped", extra={"note": "production — ensure alembic upgrade head was run"})
+    # Run Alembic migrations (upgrade to head) before accepting traffic.
+    # asyncio.to_thread is required because alembic's async env.py calls
+    # asyncio.run() internally, which cannot be nested inside a running loop.
+    await asyncio.to_thread(_run_alembic_upgrade)
+    log.info("db_migrations_applied")
 
     # Seed tracked tickers so pipeline worker has a universe to process
     await seed_tracked_tickers_from_db()
@@ -89,9 +102,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AlphaDesk API",
+    title="AlphaTrack API",
     version=settings.APP_VERSION,
-    description="Enterprise portfolio management API",
+    description="Open-source portfolio analytics platform API",
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
     lifespan=lifespan,

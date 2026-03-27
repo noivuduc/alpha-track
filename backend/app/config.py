@@ -7,7 +7,7 @@ from typing import Literal
 _ROOT_DIR = Path(__file__).resolve().parents[2]  # backend/app/config.py → backend/
 
 class Settings(BaseSettings):
-    APP_NAME:    str = "AlphaDesk"
+    APP_NAME:    str = "AlphaTrack"
     APP_VERSION: str = "1.0.0"
     ENVIRONMENT: Literal["development","staging","production"] = "development"
     DEBUG:       bool = False
@@ -16,9 +16,9 @@ class Settings(BaseSettings):
     ALGORITHM:                    str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES:  int = 60
     REFRESH_TOKEN_EXPIRE_DAYS:    int = 30
-    API_KEY_PREFIX:                str = "adsk_"
+    API_KEY_PREFIX:                str = "atk_"
 
-    DATABASE_URL: str = "postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk"
+    DATABASE_URL: str = "postgresql+asyncpg://alphatrack:changeme@localhost:5432/alphatrack"
     REDIS_URL:    str = "redis://:changeme@localhost:6379/0"
 
     # ── Market data providers ─────────────────────────────────────────────
@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = [
         "http://localhost:3000", "http://localhost:3001",
         "http://localhost:3002", "http://localhost:3003",
-        "http://localhost:3004", "https://alphadesk.app",
+        "http://localhost:3004", "https://alphatrack.app",
     ]
 
     @model_validator(mode="after")

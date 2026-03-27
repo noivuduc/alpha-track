@@ -32,7 +32,7 @@ from .base import HistoryBar, MarketDataProvider, NewsItem, PriceDict, ProfileDi
 # Yahoo Finance public REST endpoints (not the yfinance library)
 _YF_SEARCH = "https://query1.finance.yahoo.com/v1/finance/search"
 _YF_RECS   = "https://query2.finance.yahoo.com/v6/finance/recommendationsbysymbol/{sym}"
-_YF_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AlphaDesk/1.0)"}
+_YF_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AlphaTrack/1.0)"}
 
 log = logging.getLogger(__name__)
 

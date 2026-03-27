@@ -238,7 +238,6 @@ function DonutChart({ displaySegs, title, colorMap, hoveredKey, onHover }: Donut
       <div className="text-xs font-semibold text-zinc-400 mb-3 text-center">{title}</div>
       <div className="flex items-center justify-center" style={{ width: DONUT_SIZE, height: DONUT_SIZE }}>
         <PieChart width={DONUT_SIZE} height={DONUT_SIZE}>
-          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           <Pie {...{
             data: displaySegs, dataKey: "value", nameKey: "label",
             cx: DONUT_SIZE / 2, cy: DONUT_SIZE / 2,

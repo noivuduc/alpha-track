@@ -52,7 +52,6 @@ export default function ResearchTradingViewChart({ ticker, exchange }: Props) {
     loadTvScript()
       .then(() => {
         if (cancelled) return;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const TradingView = (window as any).TradingView;
         if (!TradingView?.widget) {
           throw new Error("TradingView library unavailable");
@@ -114,7 +113,7 @@ export default function ResearchTradingViewChart({ ticker, exchange }: Props) {
         >
           TradingView
         </a>
-        {" "}· Prices shown elsewhere in AlphaDesk use a different data source.
+        {" "}· Prices shown elsewhere in AlphaTrack use a different data source.
       </p>
     </div>
   );

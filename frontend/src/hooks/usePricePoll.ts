@@ -26,8 +26,8 @@ export function usePricePoll({
   const [nextRefreshIn, setNextRefreshIn] = useState(0);
 
   const tickerKey    = [...tickers].sort().join(",");
-  const refreshTimer = useRef<ReturnType<typeof setTimeout>>();
-  const countdownRef = useRef<ReturnType<typeof setInterval>>();
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const fetchedAt    = useRef<Date | null>(null);
 
   const startCountdown = useCallback(() => {
@@ -47,7 +47,7 @@ export function usePricePoll({
       // Normalize: ensure each entry has a `ticker` field (backend uses it as key)
       const normalized: Record<string, PriceUpdate> = {};
       for (const [ticker, data] of Object.entries(raw)) {
-        normalized[ticker] = { ticker, ...data } as PriceUpdate;
+        normalized[ticker] = { ...data, ticker } as PriceUpdate;
       }
       setPrices(normalized);
       const now = new Date();

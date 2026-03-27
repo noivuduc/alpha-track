@@ -1,10 +1,11 @@
 """
-SQLAlchemy ORM models for AlphaDesk.
+SQLAlchemy ORM models for AlphaTrack.
 
 Database: PostgreSQL 16 + TimescaleDB
-  - Regular tables: users, portfolios, positions, transactions, watchlist,
-                    cache_fundamentals, cache_prices
-  - Hypertables:    price_history, api_usage, audit_log
+  - Regular tables: alphatrack_users, alphatrack_portfolios, alphatrack_positions,
+                    alphatrack_transactions, alphatrack_watchlist,
+                    alphatrack_cache_fundamentals, alphatrack_cache_prices
+  - Hypertables:    alphatrack_price_history, alphatrack_api_usage, alphatrack_audit_log
                     (partitioned by time via TimescaleDB for fast range queries)
 """
 import uuid, enum
@@ -31,13 +32,13 @@ class OrderSide(str, enum.Enum):
 
 # ── Users ─────────────────────────────────────────────────────────────────────
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = "alphatrack_users"
 
     id:                 Mapped[uuid.UUID]        = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email:              Mapped[str]              = mapped_column(String(255), unique=True, nullable=False, index=True)
     hashed_password:    Mapped[str]              = mapped_column(String(255), nullable=False)
     full_name:          Mapped[str | None]       = mapped_column(String(255))
-    tier:               Mapped[SubscriptionTier] = mapped_column(Enum(SubscriptionTier), default=SubscriptionTier.free, nullable=False)
+    tier:               Mapped[SubscriptionTier] = mapped_column(Enum(SubscriptionTier, name="alphatrack_subscriptiontier"), default=SubscriptionTier.free, nullable=False)
     # api_key column stores sha256(raw_key) — raw key never persisted
     api_key_hash:       Mapped[str | None]       = mapped_column("api_key", String(64), unique=True, index=True)
     is_active:          Mapped[bool]             = mapped_column(Boolean, default=True, nullable=False)
@@ -53,10 +54,10 @@ class User(Base):
 
 # ── Portfolios ────────────────────────────────────────────────────────────────
 class Portfolio(Base):
-    __tablename__ = "portfolios"
+    __tablename__ = "alphatrack_portfolios"
 
     id:          Mapped[uuid.UUID]   = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id:     Mapped[uuid.UUID]   = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id:     Mapped[uuid.UUID]   = mapped_column(UUID(as_uuid=True), ForeignKey("alphatrack_users.id", ondelete="CASCADE"), nullable=False, index=True)
     name:        Mapped[str]         = mapped_column(String(100), nullable=False)
     description: Mapped[str | None]  = mapped_column(Text)
     currency:    Mapped[str]         = mapped_column(String(3), default="USD", nullable=False)
@@ -71,14 +72,14 @@ class Portfolio(Base):
 
 # ── Positions ─────────────────────────────────────────────────────────────────
 class Position(Base):
-    __tablename__ = "positions"
+    __tablename__ = "alphatrack_positions"
     __table_args__ = (
         CheckConstraint("shares > 0",     name="ck_pos_shares_positive"),
         CheckConstraint("cost_basis > 0", name="ck_pos_cost_positive"),
     )
 
     id:           Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
+    portfolio_id: Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), ForeignKey("alphatrack_portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
     ticker:       Mapped[str]          = mapped_column(String(20), nullable=False, index=True)
     shares:       Mapped[Decimal]      = mapped_column(Numeric(18, 6), nullable=False)
     cost_basis:   Mapped[Decimal]      = mapped_column(Numeric(18, 6), nullable=False)  # avg cost per share
@@ -93,12 +94,12 @@ class Position(Base):
 
 # ── Transactions ──────────────────────────────────────────────────────────────
 class Transaction(Base):
-    __tablename__ = "transactions"
+    __tablename__ = "alphatrack_transactions"
 
     id:           Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    portfolio_id: Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
+    portfolio_id: Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), ForeignKey("alphatrack_portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
     ticker:       Mapped[str]        = mapped_column(String(20), nullable=False, index=True)
-    side:         Mapped[OrderSide]  = mapped_column(Enum(OrderSide, name="order_side"), nullable=False)
+    side:         Mapped[OrderSide]  = mapped_column(Enum(OrderSide, name="alphatrack_order_side"), nullable=False)
     shares:       Mapped[Decimal]    = mapped_column(Numeric(18, 6), nullable=False)
     price:        Mapped[Decimal]    = mapped_column(Numeric(18, 6), nullable=False)
     fees:         Mapped[Decimal]    = mapped_column(Numeric(18, 6), default=0, nullable=False)
@@ -111,11 +112,11 @@ class Transaction(Base):
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────
 class WatchlistItem(Base):
-    __tablename__ = "watchlist"
+    __tablename__ = "alphatrack_watchlist"
     __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_watchlist_user_ticker"),)
 
     id:            Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id:       Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id:       Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), ForeignKey("alphatrack_users.id", ondelete="CASCADE"), nullable=False, index=True)
     ticker:        Mapped[str]          = mapped_column(String(20), nullable=False)
     quant_rating:  Mapped[Decimal|None] = mapped_column(Numeric(3, 2))
     sector:        Mapped[str|None]     = mapped_column(String(100))
@@ -129,7 +130,7 @@ class WatchlistItem(Base):
 
 # ── Cache: Fundamentals (L2 Postgres cache, L1 is Redis) ─────────────────────
 class CacheFundamentals(Base):
-    __tablename__ = "cache_fundamentals"
+    __tablename__ = "alphatrack_cache_fundamentals"
 
     ticker:     Mapped[str]      = mapped_column(String(20), primary_key=True)
     source:     Mapped[str]      = mapped_column(String(50), nullable=False)   # 'financialdatasets' | 'yfinance'
@@ -141,7 +142,7 @@ class CacheFundamentals(Base):
 
 # ── Cache: Prices ─────────────────────────────────────────────────────────────
 class CachePrice(Base):
-    __tablename__ = "cache_prices"
+    __tablename__ = "alphatrack_cache_prices"
 
     ticker:     Mapped[str]          = mapped_column(String(20), primary_key=True)
     price:      Mapped[Decimal]      = mapped_column(Numeric(18, 6), nullable=False)
@@ -167,7 +168,7 @@ class CacheDataset(Base):
        7 days : company facts, ownership                (rarely changes)
        1 day  : estimates, insider trades, ttm metrics  (daily workers refresh)
     """
-    __tablename__ = "cache_dataset"
+    __tablename__ = "alphatrack_cache_dataset"
     __table_args__ = (
         # Workers query "all expired rows of type X" and
         # invalidation queries "all rows for ticker Y"
@@ -194,7 +195,7 @@ class DatasetRefreshState(Base):
       insider_trades                          : skip if refreshed < 24 hr ago
       financials_* / metrics_* / segments     : governed by EarningsSchedule
     """
-    __tablename__ = "dataset_refresh_state"
+    __tablename__ = "alphatrack_dataset_refresh_state"
 
     ticker:            Mapped[str]      = mapped_column(String(20), primary_key=True)
     dataset_type:      Mapped[str]      = mapped_column(String(50), primary_key=True)
@@ -211,7 +212,7 @@ class EarningsSchedule(Base):
       - On earnings date change → next_refresh_due = earnings_date + 2 days
       - Fallback: if last_fundamental_refresh > 30 days → schedule immediately
     """
-    __tablename__ = "earnings_schedule"
+    __tablename__ = "alphatrack_earnings_schedule"
 
     ticker:                   Mapped[str]           = mapped_column(String(20), primary_key=True)
     last_earnings_date:       Mapped[date | None]   = mapped_column(Date)
@@ -233,7 +234,7 @@ class TrackedTicker(Base):
     Refresh timestamps let pipeline workers decide what to refresh next
     without re-querying each cache layer.
     """
-    __tablename__ = "tracked_tickers"
+    __tablename__ = "alphatrack_tracked_tickers"
 
     ticker:       Mapped[str]      = mapped_column(String(20), primary_key=True)
     last_accessed:Mapped[datetime] = mapped_column(
@@ -253,7 +254,7 @@ class TickerNews(Base):
     Persistent news storage populated by the pipeline news worker.
     The app reads from here instead of calling yfinance on the request path.
     """
-    __tablename__ = "ticker_news"
+    __tablename__ = "alphatrack_ticker_news"
     __table_args__ = (
         UniqueConstraint("ticker", "url", name="uq_ticker_news_url"),
     )
@@ -269,10 +270,10 @@ class TickerNews(Base):
 
 # ── API usage log (TimescaleDB hypertable) ────────────────────────────────────
 class ApiUsage(Base):
-    __tablename__ = "api_usage"
+    __tablename__ = "alphatrack_api_usage"
 
     id:          Mapped[uuid.UUID]   = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id:     Mapped[uuid.UUID|None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    user_id:     Mapped[uuid.UUID|None] = mapped_column(UUID(as_uuid=True), ForeignKey("alphatrack_users.id", ondelete="SET NULL"))
     endpoint:    Mapped[str]         = mapped_column(String(255), nullable=False)
     method:      Mapped[str]         = mapped_column(String(10), nullable=False)
     status_code: Mapped[int]         = mapped_column(Integer, nullable=False)
@@ -289,7 +290,7 @@ class SubscriptionTierConfig(Base):
     this table is the canonical source of truth displayed/edited in the admin UI.
     On update, flush Redis key 'tier_config' to have the API reload on next start.
     """
-    __tablename__ = "subscription_tier_configs"
+    __tablename__ = "alphatrack_subscription_tier_configs"
 
     name:           Mapped[str]      = mapped_column(String(20),   primary_key=True)
     display_name:   Mapped[str]      = mapped_column(String(100),  nullable=False)
@@ -310,7 +311,7 @@ class DataProvider(Base):
     Registry of external data providers.  Admin can enable/disable and
     adjust priority, rate limits, and cost-per-call estimates.
     """
-    __tablename__ = "data_providers"
+    __tablename__ = "alphatrack_data_providers"
 
     name:              Mapped[str]      = mapped_column(String(50),   primary_key=True)
     display_name:      Mapped[str]      = mapped_column(String(100),  nullable=False)
@@ -330,7 +331,7 @@ class ProviderUsageDaily(Base):
     Pre-aggregated daily call counts + estimated costs per provider.
     Populated by the cost_tracker middleware or a nightly cron.
     """
-    __tablename__ = "provider_usage_daily"
+    __tablename__ = "alphatrack_provider_usage_daily"
     __table_args__ = (
         UniqueConstraint("date", "provider", name="uq_provider_usage_date_provider"),
     )
@@ -347,13 +348,13 @@ class ProviderUsageDaily(Base):
 
 # ── Audit log (TimescaleDB hypertable) ────────────────────────────────────────
 class AuditLog(Base):
-    __tablename__ = "audit_log"
+    __tablename__ = "alphatrack_audit_log"
 
     id:        Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id:   Mapped[uuid.UUID|None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    user_id:   Mapped[uuid.UUID|None] = mapped_column(UUID(as_uuid=True), ForeignKey("alphatrack_users.id", ondelete="SET NULL"))
     action:    Mapped[str]          = mapped_column(String(100), nullable=False)
     entity:    Mapped[str|None]     = mapped_column(String(50))
     entity_id: Mapped[uuid.UUID|None] = mapped_column(UUID(as_uuid=True))
     meta:      Mapped[dict|None]    = mapped_column("metadata", JSONB)
-    ip_address:Mapped[str|None]     = mapped_column(String(45))
+    ip_address: Mapped[str | None] = mapped_column(INET, nullable=True)
     ts:        Mapped[datetime]     = mapped_column(DateTime(timezone=True), server_default=func.now())

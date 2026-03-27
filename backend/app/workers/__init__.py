@@ -1,5 +1,5 @@
 """
-Background worker system for AlphaDesk.
+Background worker system for AlphaTrack.
 
 Workers run as long-lived asyncio tasks inside the FastAPI process.
 Each worker has a run_once(cache) coroutine that processes all tracked

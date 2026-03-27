@@ -112,7 +112,7 @@ export default function GlobalHeader({
               <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
                 <span className="text-white text-xs font-bold">A</span>
               </div>
-              <span className="font-bold text-zinc-50 tracking-tight hidden sm:inline">AlphaDesk</span>
+              <span className="font-bold text-zinc-50 tracking-tight hidden sm:inline">AlphaTrack</span>
             </Link>
           )}
         </div>

@@ -34,7 +34,7 @@ export default function LoginPage() {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <span className="text-white text-sm font-bold">A</span>
             </div>
-            <span className="text-xl font-bold text-zinc-50 tracking-tight">AlphaDesk</span>
+            <span className="text-xl font-bold text-zinc-50 tracking-tight">AlphaTrack</span>
           </div>
           <p className="text-zinc-500 text-sm">Portfolio intelligence platform</p>
         </div>

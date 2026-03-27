@@ -72,6 +72,90 @@ def _positions_to_lots(positions: list) -> list[dict]:
     return lots
 
 
+def _tx_price_for_apply(
+    ticker: str,
+    prices_bulk: dict,
+    price_lookup: dict[str, dict[str, float]],
+) -> float | None:
+    """Same price resolution as simulate_scenario / apply_scenario."""
+    p = prices_bulk.get(ticker, {}).get("price")
+    if p is not None and float(p) > 0:
+        return float(p)
+    tk_prices = price_lookup.get(ticker, {})
+    if tk_prices:
+        return float(tk_prices[max(tk_prices.keys())])
+    return None
+
+
+def _resolve_shares_delta(
+    tx: dict,
+    prices_bulk: dict,
+    price_lookup: dict[str, dict[str, float]],
+    mv: dict[str, float],
+    total_mv: float,
+) -> float:
+    """Mirror apply_scenario share delta (always positive magnitude)."""
+    ticker = tx["ticker"].upper()
+    mode   = tx["mode"]
+    value  = float(tx["value"])
+    price  = _tx_price_for_apply(ticker, prices_bulk, price_lookup)
+    if price is None or price <= 0:
+        raise ValueError(f"No price available for {ticker}")
+
+    if mode == "shares":
+        return value
+    if mode == "amount":
+        return value / price
+    if mode == "weight_pct":
+        return (value / 100.0 * total_mv) / price
+    if mode == "target_weight":
+        target_w  = value / 100.0
+        cur_mv    = mv.get(ticker, 0.0)
+        target_mv = target_w * total_mv
+        return abs(target_mv - cur_mv) / price
+    raise ValueError(f"Unknown mode: {mode}")
+
+
+def _apply_transactions_to_merged_shares(
+    lots_merged: dict[str, dict],
+    transactions: list[dict],
+    prices_bulk: dict,
+    price_lookup: dict[str, dict[str, float]],
+    mv: dict[str, float],
+    total_mv: float,
+) -> dict[str, float]:
+    """
+    Post-trade share counts per ticker (merged lots), matching apply_scenario.
+
+    Selling only reduces the sold ticker’s shares; other tickers’ share counts
+    stay the same — only their *weight %* moves when total portfolio MV changes.
+    This avoids misleading \"increased\" labels on names we did not trade.
+    """
+    shares: dict[str, float] = {t: float(lo["shares"]) for t, lo in lots_merged.items()}
+
+    for tx in transactions:
+        ticker = tx["ticker"].upper()
+        action = tx["action"]
+        shares_delta = _resolve_shares_delta(tx, prices_bulk, price_lookup, mv, total_mv)
+
+        if action == "buy":
+            shares[ticker] = shares.get(ticker, 0.0) + shares_delta
+        elif action == "sell":
+            total_t = shares.get(ticker, 0.0)
+            if total_t <= 0:
+                continue
+            sell_fraction = min(shares_delta / total_t, 1.0)
+            new_sh = total_t * (1.0 - sell_fraction)
+            if new_sh < 1e-6:
+                del shares[ticker]
+            else:
+                shares[ticker] = new_sh
+        else:
+            raise ValueError(f"Unknown action: {action}")
+
+    return shares
+
+
 # ── Delta / insight helpers ────────────────────────────────────────────────────
 
 def _delta(before: dict, after: dict) -> dict:
@@ -515,40 +599,57 @@ async def simulate_scenario(
         for t, lo in lots_merged.items()
     ], key=lambda x: -x["market_value"])
 
-    added_tickers   = sorted(after_tickers - before_tickers)
-    removed_tickers = sorted(before_tickers - after_tickers)
-    changed_tickers = sorted(
-        t for t in (after_tickers & before_tickers)
-        if abs(target_weights[t] - current_weights.get(t, 0.0)) > 5e-4
+    # Share counts after applying the same rules as apply_scenario (not normalized
+    # target weights — those imply rebalancing others when only one name is sold).
+    shares_after = _apply_transactions_to_merged_shares(
+        lots_merged, transactions, prices_bulk, price_lookup, mv, total_mv,
     )
 
-    def _change_label(t: str) -> str | None:
+    def _px_row(t: str) -> float:
+        p = _tx_price_for_apply(t, prices_bulk, price_lookup)
+        if p and p > 0:
+            return p
+        if t in lots_merged:
+            return float(lots_merged[t].get("cost_basis") or 0.0)
+        return 0.0
+
+    mv_after: dict[str, float] = {
+        t: shares_after[t] * _px_row(t) for t in shares_after
+    }
+    total_mv_after = sum(mv_after.values()) or 1.0
+
+    share_tickers_after = set(shares_after.keys())
+    added_tickers   = sorted(share_tickers_after - set(lots_merged.keys()))
+    removed_tickers = sorted(set(lots_merged.keys()) - share_tickers_after)
+    changed_tickers = sorted(
+        t for t in (set(lots_merged.keys()) & share_tickers_after)
+        if abs(shares_after[t] - float(lots_merged[t]["shares"])) > 1e-4
+    )
+
+    def _change_label_shares(t: str) -> str | None:
         if t in added_tickers:
             return "new"
-        aft_w = target_weights.get(t, 0.0)
-        bef_w = current_weights.get(t, 0.0)
-        if abs(aft_w - bef_w) < 5e-4:
+        if t not in lots_merged:
             return None
-        return "increased" if aft_w > bef_w else "reduced"
+        prev_sh = float(lots_merged[t]["shares"])
+        new_sh  = shares_after.get(t, 0.0)
+        if abs(new_sh - prev_sh) < 1e-4:
+            return None
+        return "increased" if new_sh > prev_sh else "reduced"
 
     holdings_after = sorted([
         {
             "ticker":       t,
-            "shares":       round(
-                target_weights[t] * total_mv / max(
-                    prices_bulk.get(t, {}).get("price", 1.0), 1e-6
-                ),
-                4,
-            ),
-            "weight_pct":   round(target_weights[t] * 100, 2),
-            "market_value": round(target_weights[t] * total_mv, 2),
-            "change":       _change_label(t),
+            "shares":       round(shares_after[t], 4),
+            "weight_pct":   round(mv_after[t] / total_mv_after * 100, 2),
+            "market_value": round(mv_after[t], 2),
+            "change":       _change_label_shares(t),
         }
-        for t in target_weights
+        for t in shares_after
     ], key=lambda x: -x["market_value"])
 
     # ── Step 12: Sector exposure ──────────────────────────────────────────────
-    all_sector_tickers = list({*before_tickers, *after_tickers})
+    all_sector_tickers = list({*before_tickers, *after_tickers, *share_tickers_after})
 
     async def _sector(t: str) -> tuple[str, str | None]:
         try:
@@ -577,8 +678,7 @@ async def simulate_scenario(
         "transaction_count": len(transactions),
         "buy_count":  sum(1 for tx in transactions if tx["action"] == "buy"),
         "sell_count": sum(1 for tx in transactions if tx["action"] == "sell"),
-        # Affected holdings (may be larger than transaction_count because buying
-        # one stock causes all other holdings to be proportionally reweighted)
+        # Affected holdings — tickers whose *share count* changes (matches apply)
         "tickers_added":   added_tickers,
         "tickers_removed": removed_tickers,
         "tickers_changed": changed_tickers,

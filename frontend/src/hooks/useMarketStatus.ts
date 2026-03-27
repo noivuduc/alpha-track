@@ -18,7 +18,7 @@ export type { MarketStatus };
  */
 export function useMarketStatus(): MarketStatus | null {
   const [status, setStatus] = useState<MarketStatus | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     function tick() {

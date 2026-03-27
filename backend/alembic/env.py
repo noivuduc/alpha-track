@@ -1,5 +1,5 @@
 """
-Alembic async environment for AlphaDesk.
+Alembic async environment for AlphaTrack.
 
 Supports both offline (SQL script) and online (async engine) modes.
 DATABASE_URL is read from the environment variable, falling back to

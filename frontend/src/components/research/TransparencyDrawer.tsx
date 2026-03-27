@@ -97,7 +97,7 @@ export default function TransparencyDrawer({ synthesis, coverage, computedAt }: 
           </div>
 
           <p className="text-[10px] text-zinc-700 leading-relaxed">
-            AlphaDesk is an analytical tool, not a financial advisor.
+            AlphaTrack is an analytical tool, not a financial advisor.
             Core metrics are backend-deterministic. AI narrative is illustrative and should not be the sole basis for investment decisions.
           </p>
         </div>

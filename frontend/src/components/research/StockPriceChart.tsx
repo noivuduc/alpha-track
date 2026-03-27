@@ -231,7 +231,6 @@ export default function StockPriceChart({ ticker }: { ticker: string }) {
               <YAxis tick={false} axisLine={false} tickLine={false} width={52} />
               <Tooltip content={() => null} />
               <Bar dataKey="volume" radius={[2, 2, 0, 0]} isAnimationActive={false}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 shape={(props: any) => {
                   const { x, y, width, height, index } = props;
                   const color = bars[index]?.volColor ?? "#10b981";

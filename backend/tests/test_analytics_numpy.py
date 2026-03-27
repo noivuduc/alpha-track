@@ -306,9 +306,8 @@ class TestValueAtRisk:
         assert v >= 0.0
 
     def test_matches_manual(self, returns_series):
-        r   = sorted(returns_series)
-        idx = int(0.05 * len(r))
-        ref = round(abs(r[idx]) * 100, 4)
+        # Reference uses the same np.percentile linear interpolation as the implementation.
+        ref = round(float(-np.percentile(returns_series, 5.0)) * 100, 4)
         res = value_at_risk(returns_series)
         assert abs(res - ref) < TOL
 

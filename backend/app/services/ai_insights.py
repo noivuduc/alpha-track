@@ -2,7 +2,7 @@
 
 Cache strategy
 --------------
-  Key : alphadesk:ai_insight:{TICKER}:{provider}
+  Key : alphatrack:ai_insight:{TICKER}:{provider}
   TTL : 7 days (604 800 s)
 
 Provider selection is automatic:
@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 Provider = Literal["anthropic", "openai"]
 
 AI_INSIGHT_TTL    = 7 * 24 * 3600
-_CACHE_PREFIX     = "alphadesk:ai_insight"
+_CACHE_PREFIX     = "alphatrack:ai_insight"
 _ANTHROPIC_MODEL  = "claude-haiku-4-5-20251001"
 _OPENAI_MODEL     = "gpt-4.1-mini"
 

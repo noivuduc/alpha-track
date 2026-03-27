@@ -1,7 +1,7 @@
 """
 Daily quota enforcement using Redis INCR.
 
-Key format : alphadesk:quota:{user_id}:{type}:{YYYYMMDD}
+Key format : alphatrack:quota:{user_id}:{type}:{YYYYMMDD}
 Quota types : ai_calls | simulations | portfolio_creations
 
 Usage:
