@@ -49,10 +49,10 @@ pip install -q -r requirements.txt
 pip install -q -r "$SCRIPT_DIR/pipeline/requirements.txt"
 info "Python deps installed ✓"
 
-info "Running database migrations..."
-DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
-  alembic upgrade head
-info "Migrations applied ✓"
+# info "Running database migrations..."
+# DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \
+#   alembic upgrade head
+# info "Migrations applied ✓"
 
 info "Starting FastAPI backend on http://localhost:8000 ..."
 DATABASE_URL="postgresql+asyncpg://alphadesk:changeme@localhost:5432/alphadesk" \

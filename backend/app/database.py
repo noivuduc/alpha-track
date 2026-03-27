@@ -90,6 +90,10 @@ class Cache:
     async def delete(self, key: str):
         await self.r.delete(f"alphadesk:{key}")
 
+    async def incr(self, key: str) -> int:
+        """Monotonic counter (used to coalesce debounced background work)."""
+        return int(await self.r.incr(f"alphadesk:{key}"))
+
     async def exists(self, key: str) -> bool:
         return bool(await self.r.exists(f"alphadesk:{key}"))
 

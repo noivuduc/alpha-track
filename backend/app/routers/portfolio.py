@@ -4,12 +4,10 @@ Read-only data access: all market data reads go through DataReader (Redis/PG).
 External API calls are handled exclusively by the pipeline worker.
 When data is unavailable (cold cache), returns 202 and the frontend polls.
 """
-import json as _json
 import logging
-from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +26,11 @@ from app.schemas import (
     PortfolioAnalysisResponse,
 )
 from app.services.data_reader import DataReader
-from app.services import analytics as A
+from app.services.portfolio_analytics_build import (
+    AnalyticsBuildError,
+    build_and_cache_portfolio_analytics,
+)
+from app.services.portfolio_cache_refresh import schedule_portfolio_cache_refresh_after_mutation
 from app.services.simulation_service import simulate_scenario, store_scenario, apply_scenario
 from app.services.portfolio_analysis_service import run_portfolio_analysis
 from app.pipeline.enqueue import enqueue_seed_ticker, enqueue_seed_history
@@ -39,13 +41,6 @@ router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 def _get_reader(cache: Cache = Depends(get_cache)) -> DataReader:
     return DataReader(cache=cache)
-
-
-async def _invalidate_portfolio_cache(cache: Cache, portfolio_id: UUID) -> None:
-    for period in ("1mo", "3mo", "6mo", "ytd", "1y", "2y"):
-        for bench in ("SPY", "QQQ", "IWM"):
-            await cache.delete(f"analytics:{portfolio_id}:{period}:{bench}")
-    await cache.delete(f"portfolio_analysis:{portfolio_id}")
 
 
 # ── Portfolios ────────────────────────────────────────────────────────────────
@@ -77,19 +72,34 @@ async def get_portfolio(portfolio_id: UUID, user: User = Depends(check_rate_limi
     return p
 
 @router.patch("/{portfolio_id}", response_model=PortfolioResponse)
-async def update_portfolio(portfolio_id: UUID, body: PortfolioUpdate, user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db)):
+async def update_portfolio(
+    portfolio_id: UUID,
+    body: PortfolioUpdate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache = Depends(get_cache),
+):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
     for k, v in body.model_dump(exclude_none=True).items():
         setattr(p, k, v)
+    await schedule_portfolio_cache_refresh_after_mutation(cache, portfolio_id, user.id, background_tasks)
     return p
 
 @router.delete("/{portfolio_id}", status_code=204)
-async def delete_portfolio(portfolio_id: UUID, user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db)):
+async def delete_portfolio(
+    portfolio_id: UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache = Depends(get_cache),
+):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
+    await schedule_portfolio_cache_refresh_after_mutation(cache, portfolio_id, user.id, background_tasks)
     await db.delete(p)
 
 # ── Portfolio Metrics ─────────────────────────────────────────────────────────
@@ -157,140 +167,25 @@ async def get_analytics(
     if force and not user.is_admin:
         force = False
 
-    cache_key = f"analytics:{portfolio_id}:{period}:{benchmark}"
-
-    # L1: Redis cache
-    if not force:
-        cached = await cache.get(cache_key)
-        if cached:
-            return _json.loads(cached)
-
-    # Fetch positions
-    pos_r = await db.execute(
-        select(Position).where(
-            Position.portfolio_id == portfolio_id,
-            Position.closed_at    == None,
+    try:
+        result = await build_and_cache_portfolio_analytics(
+            portfolio_id,
+            user.id,
+            db,
+            reader,
+            cache,
+            period,
+            benchmark,
+            force=force,
         )
-    )
-    positions = pos_r.scalars().all()
+    except AnalyticsBuildError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
-    if not positions:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            "Portfolio has no open positions")
-
-    # Read current prices from cache
-    tickers = list({pos.ticker for pos in positions})
-    prices  = await reader.get_prices_bulk(tickers)
-
-    # Read price history from cache (populated by pipeline)
-    fetch_tickers = list({*tickers, benchmark, "QQQ"})
-    histories: dict[str, list] = {}
-    missing_history: list[str] = []
-
-    for t in fetch_tickers:
-        hist = await reader.get_price_history(t, period)
-        if hist:
-            histories[t] = hist
-        else:
-            missing_history.append(t)
-
-    # If any position tickers have no history, enqueue pipeline tasks and return 202
-    missing_positions = [t for t in tickers if t in missing_history]
-    if missing_positions:
-        for t in missing_history:
-            await enqueue_seed_history(t)
-        for t in missing_positions:
-            await enqueue_seed_ticker(t)   # also seed price snapshots
-        return JSONResponse(
-            status_code=202,
-            content={
-                "status": "preparing",
-                "detail": f"Price history loading for: {', '.join(missing_positions)}",
-                "portfolio_id": str(portfolio_id),
-            },
-        )
-
-    if not any(t in histories for t in tickers):
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
-                            "Could not fetch price history for any position")
-
-    # Enqueue a background refresh for any tickers whose price came from PG
-    # (stale) so Redis gets warmed up for the next request.
-    stale_price_tickers = [
-        t for t in tickers
-        if prices.get(t, {}).get("_source") == "cache_pg_stale"
-    ]
-    for t in stale_price_tickers:
-        await enqueue_seed_ticker(t)
-
-    total_value = sum(
-        float(pos.shares) * prices.get(pos.ticker, {}).get("price", float(pos.cost_basis))
-        for pos in positions
-    )
-
-    # Build market calendar + price lookup
-    ref = benchmark if benchmark in histories else (
-          "SPY"     if "SPY"     in histories else tickers[0])
-
-    dates, _aligned = A.align_series(histories, ref_ticker=ref)
-    price_lookup    = A.build_price_lookup(histories)
-
-    lots = [
-        {
-            "ticker":         pos.ticker,
-            "shares":         float(pos.shares),
-            "cost_basis":     float(pos.cost_basis),
-            "opened_at_date": pos.opened_at.date().isoformat()
-                              if hasattr(pos.opened_at, "date")
-                              else str(pos.opened_at)[:10],
-        }
-        for pos in positions
-    ]
-
-    result_data = A.compute_engine(price_lookup, lots, dates, benchmark=ref)
-
-    total_cost = sum(float(p.shares) * float(p.cost_basis) for p in positions)
-    total_gain = total_value - total_cost
-    day_gain   = sum(
-        float(p.shares) * prices.get(p.ticker, {}).get("change", 0.0)
-        for p in positions
-    )
-
-    position_summary = A.compute_position_summary(positions, prices, histories)
-
-    # Read news from cache/DB (populated by pipeline)
-    import asyncio
-    news_batches = await asyncio.gather(*[reader.get_news(t) for t in tickers])
-    all_news = sorted(
-        [item for batch in news_batches for item in batch],
-        key=lambda n: n.get("date", ""),
-        reverse=True,
-    )[:10]
-
-    response = {
-        "portfolio_id": str(portfolio_id),
-        "period":       period,
-        "computed_at":  datetime.now(timezone.utc).isoformat(),
-        "total_value":    round(total_value, 2),
-        "total_cost":     round(total_cost,  2),
-        "total_gain":     round(total_gain,  2),
-        "total_gain_pct": round(total_gain / total_cost * 100 if total_cost else 0, 2),
-        "day_gain":       round(day_gain, 2),
-        "day_gain_pct":   round(day_gain / total_value * 100 if total_value else 0, 2),
-        **result_data,
-        "position_summary": position_summary,
-        "portfolio_news":   all_news,
-    }
-
-    _engine_status = result_data.get("status", "ok")
-    if _engine_status in ("insufficient_data", "partial"):
-        ttl = 300
-    elif len(positions) <= 2:
-        ttl = 900
-    else:
-        ttl = 1800
-    await cache.set(cache_key, _json.dumps(response), ttl)
-    return response
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Portfolio not found")
+    if isinstance(result, JSONResponse):
+        return result
+    return result
 
 
 # ── Portfolio Analysis (Health / Suggestions / Clusters) ─────────────────────
@@ -335,7 +230,6 @@ async def get_portfolio_analysis(
     if missing:
         for t in missing:
             await enqueue_seed_history(t)
-        from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=202,
             content={"status": "preparing", "detail": f"Loading price history for {len(missing)} ticker(s)"},
@@ -406,6 +300,7 @@ async def simulate_portfolio(
 async def apply_simulated_scenario(
     portfolio_id: UUID,
     body:      ApplyScenarioRequest,
+    background_tasks: BackgroundTasks,
     user: User              = Depends(check_rate_limit),
     db: AsyncSession        = Depends(get_db),
     cache: Cache            = Depends(get_cache),
@@ -429,8 +324,9 @@ async def apply_simulated_scenario(
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
-    # Invalidate all cached analytics for this portfolio
-    await _invalidate_portfolio_cache(cache, portfolio_id)
+    await schedule_portfolio_cache_refresh_after_mutation(
+        cache, portfolio_id, user.id, background_tasks
+    )
     return result
 
 
@@ -482,7 +378,9 @@ async def list_positions(
 
 @router.post("/{portfolio_id}/positions", response_model=PositionResponse, status_code=201)
 async def add_position(
-    portfolio_id: UUID, body: PositionCreate,
+    portfolio_id: UUID,
+    body: PositionCreate,
+    background_tasks: BackgroundTasks,
     user: User       = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
     cache: Cache     = Depends(get_cache),
@@ -497,7 +395,9 @@ async def add_position(
     pos = Position(portfolio_id=portfolio_id, **body.model_dump())
     db.add(pos)
     await db.flush()
-    await _invalidate_portfolio_cache(cache, portfolio_id)
+    await schedule_portfolio_cache_refresh_after_mutation(
+        cache, portfolio_id, user.id, background_tasks
+    )
 
     # Enqueue pipeline seed for the new ticker
     await enqueue_seed_ticker(body.ticker, source="portfolio")
@@ -505,7 +405,10 @@ async def add_position(
 
 @router.patch("/{portfolio_id}/positions/{pos_id}", response_model=PositionResponse)
 async def update_position(
-    portfolio_id: UUID, pos_id: UUID, body: PositionUpdate,
+    portfolio_id: UUID,
+    pos_id: UUID,
+    body: PositionUpdate,
+    background_tasks: BackgroundTasks,
     user: User       = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
     cache: Cache     = Depends(get_cache),
@@ -519,12 +422,16 @@ async def update_position(
 
     for k, v in body.model_dump(exclude_none=True).items():
         setattr(pos, k, v)
-    await _invalidate_portfolio_cache(cache, portfolio_id)
+    await schedule_portfolio_cache_refresh_after_mutation(
+        cache, portfolio_id, user.id, background_tasks
+    )
     return pos
 
 @router.delete("/{portfolio_id}/positions/{pos_id}", status_code=204)
 async def delete_position(
-    portfolio_id: UUID, pos_id: UUID,
+    portfolio_id: UUID,
+    pos_id: UUID,
+    background_tasks: BackgroundTasks,
     user: User       = Depends(check_rate_limit),
     db: AsyncSession = Depends(get_db),
     cache: Cache     = Depends(get_cache),
@@ -536,13 +443,19 @@ async def delete_position(
     if not p or p.user_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN)
     await db.delete(pos)
-    await _invalidate_portfolio_cache(cache, portfolio_id)
+    await schedule_portfolio_cache_refresh_after_mutation(
+        cache, portfolio_id, user.id, background_tasks
+    )
 
 # ── Transactions ──────────────────────────────────────────────────────────────
 @router.post("/{portfolio_id}/transactions", response_model=TransactionResponse, status_code=201)
 async def add_transaction(
-    portfolio_id: UUID, body: TransactionCreate,
-    user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db),
+    portfolio_id: UUID,
+    body: TransactionCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache = Depends(get_cache),
 ):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
@@ -551,6 +464,9 @@ async def add_transaction(
     txn = Transaction(portfolio_id=portfolio_id, **body.model_dump())
     db.add(txn)
     await db.flush()
+    await schedule_portfolio_cache_refresh_after_mutation(
+        cache, portfolio_id, user.id, background_tasks
+    )
     return txn
 
 @router.get("/{portfolio_id}/transactions", response_model=list[TransactionResponse])
@@ -575,8 +491,13 @@ async def list_transactions(
 
 @router.patch("/{portfolio_id}/transactions/{txn_id}", response_model=TransactionResponse)
 async def update_transaction(
-    portfolio_id: UUID, txn_id: UUID, body: TransactionUpdate,
-    user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db),
+    portfolio_id: UUID,
+    txn_id: UUID,
+    body: TransactionUpdate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache = Depends(get_cache),
 ):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
@@ -587,12 +508,19 @@ async def update_transaction(
     for k, v in body.model_dump(exclude_none=True).items():
         setattr(txn, k, v)
     await db.flush()
+    await schedule_portfolio_cache_refresh_after_mutation(
+        cache, portfolio_id, user.id, background_tasks
+    )
     return txn
 
 @router.delete("/{portfolio_id}/transactions/{txn_id}", status_code=204)
 async def delete_transaction(
-    portfolio_id: UUID, txn_id: UUID,
-    user: User = Depends(check_rate_limit), db: AsyncSession = Depends(get_db),
+    portfolio_id: UUID,
+    txn_id: UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(check_rate_limit),
+    db: AsyncSession = Depends(get_db),
+    cache: Cache = Depends(get_cache),
 ):
     p = await db.get(Portfolio, portfolio_id)
     if not p or p.user_id != user.id:
@@ -600,6 +528,9 @@ async def delete_transaction(
     txn = await db.get(Transaction, txn_id)
     if not txn or txn.portfolio_id != portfolio_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
+    await schedule_portfolio_cache_refresh_after_mutation(
+        cache, portfolio_id, user.id, background_tasks
+    )
     await db.delete(txn)
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────
