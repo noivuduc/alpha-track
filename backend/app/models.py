@@ -38,7 +38,7 @@ class User(Base):
     email:              Mapped[str]              = mapped_column(String(255), unique=True, nullable=False, index=True)
     hashed_password:    Mapped[str]              = mapped_column(String(255), nullable=False)
     full_name:          Mapped[str | None]       = mapped_column(String(255))
-    tier:               Mapped[SubscriptionTier] = mapped_column(Enum(SubscriptionTier), default=SubscriptionTier.free, nullable=False)
+    tier:               Mapped[SubscriptionTier] = mapped_column(Enum(SubscriptionTier, name="alphatrack_subscriptiontier"), default=SubscriptionTier.free, nullable=False)
     # api_key column stores sha256(raw_key) — raw key never persisted
     api_key_hash:       Mapped[str | None]       = mapped_column("api_key", String(64), unique=True, index=True)
     is_active:          Mapped[bool]             = mapped_column(Boolean, default=True, nullable=False)
@@ -99,7 +99,7 @@ class Transaction(Base):
     id:           Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     portfolio_id: Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), ForeignKey("alphatrack_portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
     ticker:       Mapped[str]        = mapped_column(String(20), nullable=False, index=True)
-    side:         Mapped[OrderSide]  = mapped_column(Enum(OrderSide, name="order_side"), nullable=False)
+    side:         Mapped[OrderSide]  = mapped_column(Enum(OrderSide, name="alphatrack_order_side"), nullable=False)
     shares:       Mapped[Decimal]    = mapped_column(Numeric(18, 6), nullable=False)
     price:        Mapped[Decimal]    = mapped_column(Numeric(18, 6), nullable=False)
     fees:         Mapped[Decimal]    = mapped_column(Numeric(18, 6), default=0, nullable=False)

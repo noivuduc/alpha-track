@@ -183,7 +183,7 @@ async def seed():
                     """
                     INSERT INTO alphatrack_users
                       (id, email, hashed_password, full_name, tier, is_active, is_verified, is_admin)
-                    VALUES ($1, $2, $3, $4, $5::subscriptiontier, TRUE, $6, $7)
+                    VALUES ($1, $2, $3, $4, $5::alphatrack_subscriptiontier, TRUE, $6, $7)
                     """,
                     user_id, email, hash_password(u["password"]),
                     u["full_name"], tier, u["is_verified"], u.get("is_admin", False),
@@ -197,7 +197,7 @@ async def seed():
                 first = u["full_name"].split()[0]
                 await conn.execute(
                     """
-                    INSERT INTO portfolios
+                    INSERT INTO alphatrack_portfolios
                       (id, user_id, name, description, currency, is_default)
                     VALUES ($1, $2, $3, $4, 'USD', TRUE)
                     """,
@@ -220,7 +220,7 @@ async def seed():
 
                 await conn.execute(
                     """
-                    INSERT INTO positions
+                    INSERT INTO alphatrack_positions
                       (id, portfolio_id, ticker, shares, cost_basis, opened_at, notes)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     """,
@@ -229,9 +229,9 @@ async def seed():
                 )
                 await conn.execute(
                     """
-                    INSERT INTO transactions
+                    INSERT INTO alphatrack_transactions
                       (id, portfolio_id, ticker, side, shares, price, fees, traded_at, notes)
-                    VALUES ($1, $2, $3, 'buy'::order_side, $4, $5, 0, $6, 'Seeded position')
+                    VALUES ($1, $2, $3, 'buy'::alphatrack_order_side, $4, $5, 0, $6, 'Seeded position')
                     """,
                     txn_id, portfolio_id, ticker, shares, cost, buy_date,
                 )

@@ -4,8 +4,9 @@
 
 AlphaTrack is an open-source, full-stack portfolio tracker built for developers and quantitative-minded investors. It computes Sharpe ratio, drawdown, sector attribution, and scenario simulations on your own data — backed by a production-grade FastAPI + TimescaleDB backend and a real async data pipeline. No SaaS, no data sharing, your portfolio stays on your server.
 
-<!-- Add a dashboard screenshot here -->
-<!-- ![AlphaTrack Dashboard](docs/images/dashboard.png) -->
+![AlphaTrack dashboard — portfolio overview](imgs/screenshot-dashboard-overview.png)
+
+*Portfolio overview: health score, benchmarks vs SPY/QQQ, return heatmap, positions, and news.*
 
 ---
 
@@ -44,6 +45,26 @@ It is not a trading platform and does not connect to your broker. It is a **rese
 | WebSocket real-time prices | Experimental / incomplete |
 | Stripe billing | Scaffolded, not implemented |
 | Email verification | Scaffolded, not implemented |
+
+---
+
+## Screenshots
+
+### Portfolio dashboard
+
+| Overview | Holdings | Risk |
+| :---: | :---: | :---: |
+| ![Dashboard overview](imgs/screenshot-dashboard-overview.png) | ![Holdings](imgs/screenshot-dashboard-holdings.png) | ![Risk analytics](imgs/screenshot-dashboard-risk.png) |
+
+### Scenario simulator
+
+![Scenario simulator — before/after metrics and sector exposure](imgs/screenshot-dashboard-simulator.png)
+
+### Equity research (example: MSFT)
+
+| Overview | Financials | Valuation |
+| :---: | :---: | :---: |
+| ![MSFT overview](imgs/screenshot-research-msft-overview.png) | ![MSFT financials](imgs/screenshot-research-msft-financials.png) | ![MSFT valuation](imgs/screenshot-research-msft-valuation.png) |
 
 ---
 

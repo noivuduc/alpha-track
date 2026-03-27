@@ -15,9 +15,8 @@ CREATE EXTENSION IF NOT EXISTS "timescaledb";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm"; -- for ticker search
 
 -- ── Subscription tiers ───────────────────────────────────────────
--- Enum name matches SQLAlchemy autogenerate: subscriptiontier (no underscore)
-CREATE TYPE subscriptiontier AS ENUM ('free', 'pro', 'fund');
-CREATE TYPE order_side AS ENUM ('buy', 'sell');
+CREATE TYPE alphatrack_subscriptiontier AS ENUM ('free', 'pro', 'fund');
+CREATE TYPE alphatrack_order_side AS ENUM ('buy', 'sell');
 
 -- ── Price history (TimescaleDB hypertable — not managed by ORM) ──
 -- Partitioned by time for fast range queries across years of OHLC data.
