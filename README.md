@@ -131,7 +131,7 @@ All tables use the `alphatrack_` prefix. See [ARCHITECTURE.md](ARCHITECTURE.md) 
 ### 1. Clone
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/alphatrack.git
+git clone https://github.com/noivuduc/alphatrack.git
 cd alphatrack
 ```
 

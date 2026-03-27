@@ -42,7 +42,7 @@ export default function AdminCostsPage() {
     setLoading(true); setError(null);
     adminApi.costs(d)
       .then(setSummary)
-      .catch(e => setError(e.message))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }
 

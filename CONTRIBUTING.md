@@ -29,7 +29,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 ### 1. Fork and clone
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/alphatrack.git
+git clone https://github.com/noivuduc/alphatrack.git
 cd alphatrack
 ```
 
